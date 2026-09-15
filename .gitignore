@@ -1,0 +1,40 @@
+# ===== Java / Maven =====
+target/
+*.class
+*.jar
+*.war
+*.ear
+*.classpath
+*.project
+*.settings/
+
+# ===== Node / Vue / Vite =====
+node_modules/
+dist/
+dist-ssr/
+.npm/
+.pnpm-store/
+
+# ===== IDE: IntelliJ IDEA =====
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+
+# ===== IDE: VS Code =====
+.vscode/
+
+# ===== 日志与临时文件 =====
+*.log
+logs/
+*.tmp
+*.bak
+
+# ===== 操作系统 =====
+.DS_Store
+Thumbs.db
+
+# ===== Spring Boot 本地配置（如有敏感信息）=====
+application-local.properties
+application-local.yml
