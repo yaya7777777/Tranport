@@ -8,9 +8,18 @@
 </template>
 <script setup>
 import {ref,onMounted} from 'vue';import http from '../api/http'
-const vehicles=ref([]);let error=''
-async function load(){try{vehicles.value=(await http.get('/vehicles')).data}catch(e){error='车辆数据加载失败，请检查后端和 MySQL。'}}
+// 车辆台账：直接查询 vehicle 关联车型/POI 的视图接口
+const vehicles=ref([])
+// 错误提示必须使用 ref 才具备响应式
+const error=ref('')
+async function load(){
+  error.value=''
+  try{vehicles.value=(await http.get('/vehicles')).data}
+  catch(e){error.value='车辆数据加载失败，请检查后端（8888）和 MySQL。'}
+}
+// 车辆六状态中文映射
 function statusText(s){return {IDLE:'空闲',LOADING:'装载',UNLOADING:'卸货',TRANSPORT:'运输',REFUEL:'加油',MAINTAIN:'保养'}[s]||s}
-function tagClass(s){return {IDLE:'green',TRANSPORT:'blue',LOADING:'orange',MAINTAIN:'red'}[s]||'gray'}
+// 各状态标签配色
+function tagClass(s){return {IDLE:'green',TRANSPORT:'blue',LOADING:'orange',UNLOADING:'purple',REFUEL:'amber',MAINTAIN:'red'}[s]||'gray'}
 onMounted(load)
 </script>

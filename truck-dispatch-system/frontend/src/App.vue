@@ -2,7 +2,14 @@
 <div class="layout">
  <aside class="sidebar">
   <div class="brand"><div class="brand-icon">🚚</div><div><div class="brand-title">运输调度平台</div><div class="brand-subtitle">TRUCK DISPATCH</div></div></div>
-  <nav><router-link to="/dashboard">📊 运行总览</router-link><router-link to="/vehicles">🚚 车辆管理</router-link><router-link to="/orders">📦 订单调度</router-link></nav>
+  <nav>
+   <router-link to="/dashboard">📊 运行总览</router-link>
+   <router-link to="/simulation">🧭 仿真沙盘</router-link>
+   <router-link to="/orders">📦 订单调度</router-link>
+   <router-link to="/vehicles">🚚 车辆管理</router-link>
+   <router-link to="/master">🗂️ 基础数据</router-link>
+   <router-link to="/gps">📡 设备定位</router-link>
+  </nav>
   <div class="sidebar-foot">MySQL · Spring Boot · Vue 3</div>
  </aside>
  <main class="main">
