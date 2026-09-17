@@ -41,9 +41,14 @@ from datetime import datetime
 # 演示车辆车牌（与 database/demo_data.sql 中的 12 辆车一一对应）
 DEMO_PLATES = [f"川A1{i:04d}" for i in range(1, 13)]
 
-# 成都市区巡航范围（经度、纬度的最小/最大值）
-LNG_MIN, LNG_MAX = 103.95, 104.22
-LAT_MIN, LAT_MAX = 30.52, 30.73
+# 仿真中心点（成都高新区）与 30 公里巡航范围
+CENTER_LNG, CENTER_LAT = 104.0668, 30.5728
+# 30km 对应的经纬度跨度：1 纬度≈111km，1 经度≈111×cos(lat)km
+RADIUS_KM = 30.0
+LAT_DELTA = RADIUS_KM / 111.0                        # ≈0.270 度
+LNG_DELTA = RADIUS_KM / (111.0 * math.cos(math.radians(CENTER_LAT)))  # ≈0.314 度
+LNG_MIN, LNG_MAX = CENTER_LNG - LNG_DELTA, CENTER_LNG + LNG_DELTA
+LAT_MIN, LAT_MAX = CENTER_LAT - LAT_DELTA, CENTER_LAT + LAT_DELTA
 
 
 def post_gps(server, payload):

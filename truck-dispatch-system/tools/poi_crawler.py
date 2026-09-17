@@ -11,8 +11,9 @@ POI 分类与数据库 poi_category 的对应关系：
        pip install requests            # 仅在线模式需要；不用 requests 时本脚本零第三方依赖
        python poi_crawler.py --mode amap --key 你的高德KEY --total 500
        # 也可用环境变量传 Key：set AMAP_KEY=你的KEY
-   原理：调用高德「搜索 POI 2.0 / place/text」文本搜索接口，按 6 个关键词在成都市域内
-   分页抓取（每页 20 条），过滤无坐标的脏数据，生成幂等 SQL 文件。
+   原理：调用高德「搜索 POI 2.0 / place/around」周边搜索接口，以成都高新区
+   (104.0668,30.5728) 为中心、30km 为半径，按 6 类关键词分页抓取（每页 20 条），
+   过滤无坐标的脏数据，生成幂等 SQL 文件。
 
 2. 离线模拟生成（无需 Key、无需联网，用于评级数量验收与课堂演示）：
        python poi_crawler.py --mode offline --total 1000
@@ -127,24 +128,33 @@ def gen_offline(total):
     return rows
 
 
-def fetch_amap(key, total):
-    """调用高德文本搜索接口按 6 类抓取，直到达到 total 条或结果耗尽。"""
+def fetch_amap(key, total, center="104.0668,30.5728", radius=30000):
+    """
+    调用高德「周边搜索 / place/around」接口，以 center 为圆心、radius 米为半径，
+    按 6 个分类关键词分页抓取真实 POI，直到达到 total 条或结果耗尽。
+
+    :param key:    高德 Web 服务 Key
+    :param total:  目标 POI 总数
+    :param center: 搜索中心点 "经度,纬度"（默认成都高新区）
+    :param radius: 搜索半径（米），默认 30000 = 30 公里
+    """
     rows, seen_locations = [], set()
     per_category = math.ceil(total / len(CATEGORIES))
     for cid, cname, keyword, _prefix in CATEGORIES:
         page, got = 1, 0
         while got < per_category:
+            # 周边搜索 API：location=中心点&radius=半径&keywords=关键词
             params = {
                 "keywords": keyword,
-                "city": "成都",
-                "citylimit": "true",   # 严格限定成都市
+                "location": center,
+                "radius": radius,
                 "offset": 20,
                 "page": page,
                 "key": key,
                 "extensions": "base",
                 "output": "JSON",
             }
-            url = "https://restapi.amap.com/v3/place/text?" + urllib.parse.urlencode(params)
+            url = "https://restapi.amap.com/v3/place/around?" + urllib.parse.urlencode(params)
             try:
                 with urllib.request.urlopen(url, timeout=10) as resp:
                     data = json.loads(resp.read().decode("utf-8"))
@@ -152,7 +162,7 @@ def fetch_amap(key, total):
                 print(f"[WARN] {cname} 第{page}页请求失败：{e}，跳过本批")
                 break
             if data.get("status") != "1":
-                print(f"[ERROR] 高德返回错误：{data.get('info')}（检查 Key 与配额）")
+                print(f"[ERROR] 高德返回错误：{data.get('info')}（检查 Key 类型须为 Web 服务）")
                 break
 
             pois = data.get("pois") or []
@@ -167,8 +177,6 @@ def fetch_amap(key, total):
                 seen_locations.add(location)
                 lng_s, lat_s = location.split(",")
                 lng, lat = float(lng_s), float(lat_s)
-                if not (103.5 < lng < 104.8 and 30.1 < lat < 31.1):
-                    continue  # 坐标范围二次校验，剔除异常点
                 adname = poi.get("adname") or "成都市"
                 rows.append((poi.get("name", "未命名POI"), cid, round(lng, 7), round(lat, 7),
                              f"成都市{adname}{poi.get('address') or ''}", None,
@@ -218,7 +226,11 @@ def parse_args():
     parser.add_argument("--key", default=os.environ.get("AMAP_KEY", ""),
                         help="高德 Web 服务 Key（也可用环境变量 AMAP_KEY）")
     parser.add_argument("--total", type=int, default=500,
-                        help="目标 POI 总数：500 对应评级“良”，1000 对应“优”")
+                        help="目标 POI 总数：500 对应评级良，1000 对应优")
+    parser.add_argument("--center", default="104.0668,30.5728",
+                        help="周边搜索中心点 经度,纬度（默认成都高新区，30km 范围）")
+    parser.add_argument("--radius", type=int, default=30000,
+                        help="周边搜索半径（米），默认 30000=30km")
     parser.add_argument("--out", default=os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "database", "poi_generated.sql"),
         help="输出 SQL 文件路径")
@@ -231,8 +243,8 @@ if __name__ == "__main__":
         if not ARGS.key:
             print("在线采集需要高德 Key：--key 或设置环境变量 AMAP_KEY（申请：https://lbs.amap.com）")
             sys.exit(1)
-        print(f"开始高德在线采集，目标 {ARGS.total} 条 ...")
-        data_rows = fetch_amap(ARGS.key, ARGS.total)
+        print(f"开始高德周边采集，中心 {ARGS.center} 半径 {ARGS.radius}m，目标 {ARGS.total} 条 ...")
+        data_rows = fetch_amap(ARGS.key, ARGS.total, ARGS.center, ARGS.radius)
         write_sql(data_rows, ARGS.out, "amap")
     else:
         print(f"离线生成 {ARGS.total} 条成都 POI（6 类）...")
