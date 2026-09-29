@@ -157,4 +157,54 @@ public class MasterDataRepository {
     public record FactoryRelation(int factoryId, int warehouseId, String relationType,
                                   int factoryPoiId, int warehousePoiId) {
     }
+
+    /* ====================== 主数据存在性校验（管理类写接口用） ====================== */
+
+    private boolean exists(String table, String keyCol, int id) {
+        Long cnt = jdbc.queryForObject("SELECT COUNT(*) FROM " + table + " WHERE " + keyCol + " = ?", Long.class, id);
+        return cnt != null && cnt > 0;
+    }
+
+    /** 工厂是否存在 */
+    public boolean existsFactory(int factoryId) { return exists("factory", "factory_id", factoryId); }
+
+    /** 仓库是否存在 */
+    public boolean existsWarehouse(int warehouseId) { return exists("warehouse", "warehouse_id", warehouseId); }
+
+    /** 货物是否存在 */
+    public boolean existsCargo(int cargoId) { return exists("cargo", "cargo_id", cargoId); }
+
+    /** 司机是否存在 */
+    public boolean existsDriver(int driverId) { return exists("driver", "driver_id", driverId); }
+
+    /**
+     * 厂仓关系下拉数据（新增需求表单用）：带出工厂/仓库名称，前端选一条关系即确定起终点。
+     */
+    public List<FwOption> findFwOptions() {
+        String sql = "SELECT fw.factory_id, f.factory_name, fw.warehouse_id, w.warehouse_name, fw.relation_type "
+                + "FROM factory_warehouse fw "
+                + "JOIN factory f ON fw.factory_id = f.factory_id "
+                + "JOIN warehouse w ON fw.warehouse_id = w.warehouse_id "
+                + "ORDER BY fw.fw_id";
+        return jdbc.query(sql, (rs, n) -> new FwOption(
+                rs.getInt("factory_id"), rs.getString("factory_name"),
+                rs.getInt("warehouse_id"), rs.getString("warehouse_name"),
+                rs.getString("relation_type")));
+    }
+
+    /** 厂仓关系下拉选项 */
+    public record FwOption(int factoryId, String factoryName, int warehouseId,
+                           String warehouseName, String relationType) {
+    }
+
+    /** 在职司机下拉数据（新增车辆表单用） */
+    public List<DriverRow> findDrivers() {
+        String sql = "SELECT driver_id, name, license_type FROM driver WHERE status = 1 ORDER BY driver_id";
+        return jdbc.query(sql, (rs, n) -> new DriverRow(
+                rs.getInt("driver_id"), rs.getString("name"), rs.getString("license_type")));
+    }
+
+    /** 司机下拉选项 */
+    public record DriverRow(int driverId, String name, String licenseType) {
+    }
 }

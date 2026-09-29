@@ -137,4 +137,35 @@ public class OrderRepository {
     public int reopenOpenOrders() {
         return jdbc.update("UPDATE cargo_order SET status = 'PENDING' WHERE status IN ('ASSIGNED','TRANSPORTING')");
     }
+
+    /** 查询订单状态编码，不存在返回 null（软删除前的状态校验用） */
+    public String findStatusById(int orderId) {
+        var list = jdbc.queryForList("SELECT status FROM cargo_order WHERE order_id = ?",
+                String.class, orderId);
+        return list.isEmpty() ? null : list.get(0);
+    }
+
+    /** 订单数量置为失效（软删除）：仅改状态不物理删行，历史轨迹仍可追溯 */
+    public int softCancel(int orderId) {
+        return jdbc.update("UPDATE cargo_order SET status = 'CANCELLED', remark = CONCAT(IFNULL(remark,''), '[已失效]') "
+                + "WHERE order_id = ?", orderId);
+    }
+
+    /** 收益计算输入：数量、货物单价、路线距离与起终点（路线可能未回写，用 GIS 兜底估算） */
+    public record RevenueInfo(double quantity, Double unitPrice, Double distance,
+                              int originPoiId, int destPoiId, String orderNo, String cargoName) {
+    }
+
+    /** 查询订单收益计算所需字段，不存在返回 null */
+    public RevenueInfo findRevenueInfo(int orderId) {
+        String sql = "SELECT co.quantity, c.unit_price, r.distance, co.origin_poi_id, co.destination_poi_id, "
+                + "co.order_no, c.cargo_name FROM cargo_order co "
+                + "JOIN cargo c ON co.cargo_id = c.cargo_id LEFT JOIN route r ON co.route_id = r.route_id "
+                + "WHERE co.order_id = ?";
+        var list = jdbc.query(sql, (rs, n) -> new RevenueInfo(
+                rs.getDouble("quantity"), rs.getObject("unit_price", Double.class),
+                rs.getObject("distance", Double.class), rs.getInt("origin_poi_id"),
+                rs.getInt("destination_poi_id"), rs.getString("order_no"), rs.getString("cargo_name")), orderId);
+        return list.isEmpty() ? null : list.get(0);
+    }
 }

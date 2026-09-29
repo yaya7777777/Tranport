@@ -76,3 +76,16 @@
 .matrix-cell{text-align:center}
 .track-svg{width:100%;height:auto;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px}
 @media(max-width:1100px){.sim-layout{grid-template-columns:1fr}.sim-counts{margin-left:0}}
+
+/* ===== 需求/车辆管理表单（新增、设置位置、设置状态） ===== */
+.form-panel{margin-bottom:18px}
+.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin-bottom:14px}
+.form-item{display:flex;flex-direction:column;gap:6px}
+.form-item label{font-size:12px;color:#64748b}
+.form-item input,.form-item select{padding:8px 10px;border:1px solid #cbd5e1;border-radius:7px;font-size:13px;background:#fff}
+.form-item input:focus,.form-item select:focus{outline:none;border-color:#2563eb}
+.form-actions{display:flex;gap:10px}
+.btn-mini-danger{border-color:#fecaca;color:#b91c1c}
+.btn-mini-danger:hover{background:#fef2f2}
+.revenue-box{display:flex;gap:24px;align-items:center;flex-wrap:wrap;font-size:13px}
+.revenue-box b{font-size:17px}

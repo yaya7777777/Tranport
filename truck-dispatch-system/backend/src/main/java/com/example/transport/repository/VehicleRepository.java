@@ -114,4 +114,73 @@ public class VehicleRepository {
     public void markAllIdle() {
         jdbc.update("UPDATE vehicle SET current_status = 'IDLE' WHERE status = 1");
     }
+
+    /* ====================== 车辆管理接口（增删/定位/状态设置） ====================== */
+
+    /** 判断车辆是否存在（无论启用与否） */
+    public boolean existsById(int vehicleId) {
+        Long cnt = jdbc.queryForObject("SELECT COUNT(*) FROM vehicle WHERE vehicle_id = ?", Long.class, vehicleId);
+        return cnt != null && cnt > 0;
+    }
+
+    /** 车牌号是否已被占用 */
+    public boolean existsPlate(String plateNumber) {
+        Long cnt = jdbc.queryForObject("SELECT COUNT(*) FROM vehicle WHERE plate_number = ?", Long.class, plateNumber);
+        return cnt != null && cnt > 0;
+    }
+
+    /** 查询车辆启用标志：null=不存在，1=启用，0=已停用（软删除） */
+    public Integer findActiveFlag(int vehicleId) {
+        var list = jdbc.queryForList("SELECT status FROM vehicle WHERE vehicle_id = ?", Integer.class, vehicleId);
+        return list.isEmpty() ? null : list.get(0);
+    }
+
+    /** 查询车辆当前状态编码，不存在返回 null */
+    public String findCurrentStatus(int vehicleId) {
+        var list = jdbc.queryForList("SELECT current_status FROM vehicle WHERE vehicle_id = ?",
+                String.class, vehicleId);
+        return list.isEmpty() ? null : list.get(0);
+    }
+
+    /** 查询车辆当前所在 POI ID，无定位或车辆不存在返回 null */
+    public Integer findCurrentPoiId(int vehicleId) {
+        var list = jdbc.queryForList("SELECT current_poi_id FROM vehicle WHERE vehicle_id = ?",
+                Integer.class, vehicleId);
+        return list.isEmpty() ? null : list.get(0);
+    }
+
+    /**
+     * 新增车辆，返回自增 ID（初始空闲、默认油量 200L，续航按车型油耗折算）
+     */
+    public int insert(String plateNumber, int typeId, Integer driverId, Integer poiId, java.time.LocalDate purchaseDate) {
+        jdbc.update("INSERT INTO vehicle (plate_number, type_id, driver_id, current_poi_id, current_status, "
+                        + "remaining_fuel, estimated_range, purchase_date, status) "
+                        + "SELECT ?, ?, ?, ?, 'IDLE', 200, "
+                        + "CASE WHEN vt.fuel_consumption > 0 THEN 200 / (vt.fuel_consumption / 100) ELSE 0 END, "
+                        + "?, 1 FROM vehicle_type vt WHERE vt.type_id = ?",
+                plateNumber, typeId, driverId, poiId, java.sql.Date.valueOf(purchaseDate), typeId);
+        return jdbc.queryForObject("SELECT vehicle_id FROM vehicle WHERE plate_number = ?", Integer.class, plateNumber);
+    }
+
+    /** 车辆失效（软删除）：置启用标志为 0，行保留供历史调度追溯 */
+    public int softDisable(int vehicleId) {
+        return jdbc.update("UPDATE vehicle SET status = 0 WHERE vehicle_id = ?", vehicleId);
+    }
+
+    /** 设置车辆位置（锚定到 POI 站点） */
+    public int updateLocation(int vehicleId, int poiId) {
+        return jdbc.update("UPDATE vehicle SET current_poi_id = ? WHERE vehicle_id = ?", poiId, vehicleId);
+    }
+
+    /** 设置车辆当前状态编码 */
+    public int updateCurrentStatus(int vehicleId, String statusCode) {
+        return jdbc.update("UPDATE vehicle SET current_status = ? WHERE vehicle_id = ?", statusCode, vehicleId);
+    }
+
+    /** 写入一条车辆状态变更日志（vehicle_status_log 表，人工设置与仿真引擎共用） */
+    public void logStatusChange(int vehicleId, Integer fromStatusId, int toStatusId, Integer poiId, String remark) {
+        jdbc.update("INSERT INTO vehicle_status_log (vehicle_id, from_status_id, to_status_id, poi_id, change_time, remark) "
+                        + "VALUES (?, ?, ?, ?, NOW(), ?)",
+                vehicleId, fromStatusId, toStatusId, poiId, remark);
+    }
 }

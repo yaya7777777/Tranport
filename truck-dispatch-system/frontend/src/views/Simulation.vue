@@ -30,59 +30,16 @@
  </div>
 
  <div class="sim-layout">
-  <!-- SVG 沙盘主区 -->
+  <!-- Leaflet 真实地图主区（高德底图，支持缩放与拖动加载瓦片） -->
   <div class="panel map-panel">
-   <svg :viewBox="`0 0 ${MAP_W} ${proj.h}`" preserveAspectRatio="xMidYMid meet">
-    <!-- 异常影响范围（红色脉冲圆） -->
-    <g v-for="a in anomalies" :key="'a'+a.anomalyId">
-     <circle :cx="xy(a.longitude,a.latitude).x" :cy="xy(a.longitude,a.latitude).y"
-             fill="none" stroke="#dc2626" stroke-width="1.5">
-      <animate attributeName="r" values="6;20" dur="1.6s" repeatCount="indefinite"/>
-      <animate attributeName="opacity" values="0.7;0" dur="1.6s" repeatCount="indefinite"/>
-     </circle>
-     <circle :cx="xy(a.longitude,a.latitude).x" :cy="xy(a.longitude,a.latitude).y" r="6"
-             fill="#dc2626" stroke="#fff" stroke-width="1.5"/>
-     <text :x="xy(a.longitude,a.latitude).x+9" :y="xy(a.longitude,a.latitude).y+4"
-           class="anomaly-text">⚠ {{anomalyText(a.anomalyType)}}</text>
-    </g>
-
-    <!-- POI 站点（按分类着色，可通过图层开关过滤） -->
-    <g v-for="p in visiblePois" :key="'p'+p.poiId">
-     <circle :cx="xy(p.longitude,p.latitude).x" :cy="xy(p.longitude,p.latitude).y"
-             :r="pois.length<=100?4.5:3" :fill="catColor(p.categoryId)"
-             :stroke="selectedPoi&&selectedPoi.poiId===p.poiId?'#111':'#fff'" stroke-width="1">
-      <title>{{p.poiName}}（{{p.categoryName}}）{{p.address||''}}</title>
-     </circle>
-     <text v-if="pois.length<=100" :x="xy(p.longitude,p.latitude).x+6"
-           :y="xy(p.longitude,p.latitude).y+3" class="poi-label">{{p.poiName}}</text>
-    </g>
-
-    <!-- 在途车辆的运输路线虚线：当前位置 → 目的地（名称在 POI 中解析坐标） -->
-    <g v-for="v in movingVehicles" :key="'r'+v.vehicleId">
-     <line :x1="xy(v.longitude,v.latitude).x" :y1="xy(v.longitude,v.latitude).y"
-           :x2="xy(destOf(v).lng,destOf(v).lat).x" :y2="xy(destOf(v).lng,destOf(v).lat).y"
-           :stroke="statusColor(v.status)" stroke-width="1.6" stroke-dasharray="6 5" opacity="0.55"/>
-    </g>
-
-    <!-- 车辆：三角形按航向角旋转，颜色随状态，点击查看详情 -->
-    <g v-for="v in vehicles" :key="'v'+v.vehicleId" class="vehicle-g"
-       @click="selectedVehicle=v">
-     <path d="M0,-9 L7,8 L0,4 L-7,8 Z"
-           :transform="`translate(${xy(v.longitude,v.latitude).x},${xy(v.longitude,v.latitude).y}) rotate(${v.heading||0})`"
-           :fill="statusColor(v.status)" stroke="#111827" stroke-width="0.8">
-      <title>{{v.plateNumber}} {{statusText(v.status)}}{{v.orderNo?' 订单:'+v.orderNo:''}}</title>
-     </path>
-     <text :x="xy(v.longitude,v.latitude).x" :y="xy(v.longitude,v.latitude).y+20"
-           class="vehicle-label" text-anchor="middle">{{v.plateNumber}}</text>
-    </g>
-   </svg>
+   <div id="sim-map" class="sim-map"></div>
 
    <!-- 图例 -->
    <div class="legend">
     <div class="legend-title">POI 图层</div>
     <label v-for="c in categories" :key="c.id" class="legend-item">
      <input type="checkbox" :value="c.id" v-model="activeLayers">
-     <i :style="{background:c.color}"></i>{{c.name}}
+     <i :style="{background:c.color}"></i>{{c.name}} ×{{poiCounts[c.id]||0}}
     </label>
     <div class="legend-title" style="margin-top:8px">车辆状态</div>
     <span v-for="s in statusLegend" :key="s.code" class="legend-item">
@@ -129,12 +86,11 @@
 </div>
 </template>
 <script setup>
-// 仿真沙盘页：每 1.5s 轮询快照，把经纬度做等距圆柱投影映射到 SVG 坐标，
-// 叠加 POI 站点、车辆（按状态着色/按航向旋转）、运输路线与交通异常。
-import {ref,reactive,computed,onMounted,onUnmounted} from 'vue'
+// 仿真沙盘页：每 1.5s 轮询快照，基于 Leaflet + 高德底图渲染真实地图，
+// 叠加 POI 站点、车辆（按状态着色/航向旋转/平滑移动）、运输路线与交通异常。
+import {ref,reactive,computed,watch,onMounted,onUnmounted} from 'vue'
 import http from '../api/http'
 
-const MAP_W = 1000          // SVG 画布逻辑宽度（高度随经纬度范围自适应）
 const pois = ref([])        // 全量 POI（静态，只加载一次）
 const vehicles = ref([])    // 快照中的车辆位置
 const anomalies = ref([])   // 活跃交通异常
@@ -145,14 +101,22 @@ const error = ref('')
 const selectedVehicle = ref(null)
 const selectedPoi = ref(null)
 
-// POI 六个分类的颜色与图层开关
+// POI 六个分类的颜色与图层开关（收费站当前无数据，不入图例）
 const categories = [
   {id:1,name:'工厂',color:'#dc2626'}, {id:2,name:'仓库',color:'#2563eb'},
-  {id:3,name:'加油站',color:'#f59e0b'}, {id:4,name:'收费站',color:'#7c3aed'},
-  {id:5,name:'停车场',color:'#64748b'}, {id:6,name:'物流中心',color:'#059669'}
+  {id:6,name:'物流中心',color:'#059669'}, {id:3,name:'加油站',color:'#f59e0b'},
+  {id:7,name:'修车厂',color:'#7c3aed'}, {id:5,name:'停车场',color:'#64748b'}
 ]
+// 各分类圆点大小：工厂量大用小圆点降低视觉密度，物流中心少而重要更醒目
+const CAT_RADIUS = {1:3.5, 2:5, 3:5, 5:5, 6:7, 7:5}
 const activeLayers = ref(categories.map(c => c.id))
 const visiblePois = computed(() => pois.value.filter(p => activeLayers.value.includes(p.categoryId)))
+// 图例中展示各分类数量
+const poiCounts = computed(() => {
+  const m = {}
+  pois.value.forEach(p => { m[p.categoryId] = (m[p.categoryId] || 0) + 1 })
+  return m
+})
 
 const STATUS_MAP = {
   IDLE:{label:'空闲',color:'#94a3b8',cls:'gray'},
@@ -188,40 +152,141 @@ function destOf(v) {
   return p ? {lng:p.longitude, lat:p.latitude} : null
 }
 
-// 投影范围：综合 POI、车辆、异常的经纬度取并集，留 8% 边距
-const bounds = computed(() => {
-  const pts = []
-  visiblePois.value.forEach(p => pts.push([p.longitude,p.latitude]))
-  vehicles.value.forEach(v => v.longitude != null && pts.push([v.longitude,v.latitude]))
-  anomalies.value.forEach(a => pts.push([a.longitude,a.latitude]))
-  if (pts.length === 0) return null
-  const lngs = pts.map(p => p[0]), lats = pts.map(p => p[1])
-  let minLng = Math.min(...lngs), maxLng = Math.max(...lngs)
-  let minLat = Math.min(...lats), maxLat = Math.max(...lats)
-  // 经纬度跨度为 0（只有一个点）时给一个默认范围，避免除零
-  if (maxLng === minLng) { minLng -= 0.05; maxLng += 0.05 }
-  if (maxLat === minLat) { minLat -= 0.05; maxLat += 0.05 }
-  const padLng = (maxLng-minLng)*0.08, padLat = (maxLat-minLat)*0.08
-  return {minLng:minLng-padLng, maxLng:maxLng+padLng, minLat:minLat-padLat, maxLat:maxLat+padLat}
-})
+// ---------- 坐标纠偏：高德底图为 GCJ-02，后端经纬度为 WGS-84 ----------
+function transformLat(x, y) {
+  let r = -100 + 2*x + 3*y + 0.2*y*y + 0.1*x*y + 0.2*Math.sqrt(Math.abs(x))
+  r += (20*Math.sin(6*x*Math.PI) + 20*Math.sin(2*x*Math.PI)) * 2/3
+  r += (20*Math.sin(y*Math.PI) + 40*Math.sin(y/3*Math.PI)) * 2/3
+  r += (160*Math.sin(y/12*Math.PI) + 320*Math.sin(y*Math.PI/30)) * 2/3
+  return r
+}
+function transformLng(x, y) {
+  let r = 300 + x + 2*y + 0.1*x*x + 0.1*x*y + 0.1*Math.sqrt(Math.abs(x))
+  r += (20*Math.sin(6*x*Math.PI) + 20*Math.sin(2*x*Math.PI)) * 2/3
+  r += (20*Math.sin(x*Math.PI) + 40*Math.sin(x/3*Math.PI)) * 2/3
+  r += (150*Math.sin(x/12*Math.PI) + 300*Math.sin(x/30*Math.PI)) * 2/3
+  return r
+}
+/** WGS-84 -> GCJ-02（返回 [lng, lat]，境外点原样返回） */
+function wgs84ToGcj02(lng, lat) {
+  if (lng < 72.004 || lng > 137.8347 || lat < 0.8293 || lat > 55.8271) return [lng, lat]
+  const dLat = transformLat(lng-105, lat-35), dLng = transformLng(lng-105, lat-35)
+  const radLat = lat/180*Math.PI
+  let magic = Math.sin(radLat); magic = 1 - 0.006693421622965943*magic*magic
+  const sm = Math.sqrt(magic)
+  return [lng + (dLng*180)/(6378245/sm*Math.cos(radLat)*Math.PI),
+          lat + (dLat*180)/((6378245*(1-0.006693421622965943))/(magic*sm)*Math.PI)]
+}
 
-// 等距圆柱投影：纬度方向乘 cos(中心纬度) 保持距离比例，最终得到统一缩放比例 k
-const proj = computed(() => {
-  const b = bounds.value
-  if (!b) return {h:MAP_W*0.7, k:1, minLng:0, maxLat:0, cosLat:1}
-  const cosLat = Math.cos((b.minLat+b.maxLat)/2*Math.PI/180)
-  const kx = MAP_W/((b.maxLng-b.minLng)*cosLat)
-  const ky = MAP_W/((b.maxLat-b.minLat))       // 高度上限也用 MAP_W 约束
-  const k = Math.min(kx, ky)
-  const h = (b.maxLat-b.minLat)*k
-  return {h:Math.max(420,h), k, minLng:b.minLng, maxLat:b.maxLat, cosLat}
-})
-/** 经纬度 -> SVG 像素坐标（y 轴翻转，纬度越高越靠上） */
-function xy(lng, lat) {
-  return {
-    x: (lng-proj.value.minLng)*proj.value.cosLat*proj.value.k,
-    y: (proj.value.maxLat-lat)*proj.value.k
-  }
+// ---------- Leaflet 地图状态 ----------
+let map = null                     // Leaflet 地图实例
+const vehicleMarkers = new Map()   // vehicleId -> marker
+const routeLines = new Map()       // vehicleId -> polyline
+const poiMarkers = new Map()       // poiId -> circleMarker
+const anomalyMarkers = new Map()   // anomalyId -> marker
+let firstFit = true                // 首次拿到数据后自动适配一次视野，之后不跟随
+
+/** 初始化地图：高德路网底图 + 卫星图切换，支持缩放/拖动加载瓦片 */
+function initMap() {
+  map = L.map('sim-map', {zoomControl:true, attributionControl:false, preferCanvas:true})
+    .setView([31.23, 121.47], 10)
+  window.__simMap = map   // 调试：暴露地图实例，便于控制台排查视野问题
+  const gaode = L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
+    {subdomains:['1','2','3','4'], maxZoom:18})
+  const satellite = L.tileLayer('https://webst0{s}.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}',
+    {subdomains:['1','2','3','4'], maxZoom:18})
+  gaode.addTo(map)
+  L.control.layers({'高德地图':gaode, '高德卫星':satellite}, null, {position:'topright'}).addTo(map)
+}
+
+/** 绘制/更新 POI 站点（按图层开关过滤，复用 circleMarker） */
+function drawPois() {
+  if (!map) return
+  const show = new Set(activeLayers.value)
+  pois.value.forEach(p => {
+    const [lng, lat] = wgs84ToGcj02(p.longitude, p.latitude)
+    let m = poiMarkers.get(p.poiId)
+    if (!show.has(p.categoryId)) {
+      if (m) { map.removeLayer(m); poiMarkers.delete(p.poiId) }
+      return
+    }
+    if (!m) {
+      m = L.circleMarker([lat, lng], {radius:CAT_RADIUS[p.categoryId]||5, color:'#fff', weight:1.2,
+        fillColor:catColor(p.categoryId), fillOpacity:.85})
+        .bindTooltip(`${p.poiName}（${p.categoryName}）`, {direction:'top', offset:[0,-6]})
+        .on('click', () => { selectedPoi.value = p })
+      m.addTo(map); poiMarkers.set(p.poiId, m)
+    }
+  })
+}
+
+watch(activeLayers, drawPois)
+
+/** 车辆 marker 的内部结构：三角形（按航向旋转+状态色）+ 车牌标签 */
+const vehHtml = v => `<div class="veh-pin" style="--c:${statusColor(v.status)}">`
+  + `<div class="veh-tri" style="transform:rotate(${v.heading||0}deg)"></div>`
+  + `<span class="veh-plate">${v.plateNumber||''}</span></div>`
+
+/** 绘制/更新车辆 marker 与运输路线（复用 marker，CSS 过渡实现平滑移动） */
+function drawVehicles() {
+  if (!map) return
+  const alive = new Set()
+  vehicles.value.forEach(v => {
+    if (v.longitude == null) return
+    alive.add(v.vehicleId)
+    const [lng, lat] = wgs84ToGcj02(v.longitude, v.latitude)
+    let mk = vehicleMarkers.get(v.vehicleId)
+    if (!mk) {
+      mk = L.marker([lat, lng], {icon: L.divIcon({className:'', html:'', iconSize:[34,34], iconAnchor:[17,17]})}).addTo(map)
+      mk.on('click', () => { selectedVehicle.value = vehicles.value.find(x => x.vehicleId === v.vehicleId) || v })
+      vehicleMarkers.set(v.vehicleId, mk)
+    }
+    mk.setLatLng([lat, lng])                     // 位置变化由过渡动画平滑衔接
+    const el = mk.getElement()
+    if (el) el.innerHTML = vehHtml(v)            // 刷新状态色/航向/车牌
+    mk.bindTooltip(`${v.plateNumber} · ${statusText(v.status)}${v.orderNo ? ' · ' + v.orderNo : ''}`)
+    // 运输路线虚线：当前位置 → 目的地
+    const d = destOf(v)
+    let line = routeLines.get(v.vehicleId)
+    if (d) {
+      const [dlng, dlat] = wgs84ToGcj02(d.lng, d.lat)
+      if (!line) {
+        line = L.polyline([], {dashArray:'7 8', weight:2, opacity:.6}).addTo(map)
+        routeLines.set(v.vehicleId, line)
+      }
+      line.setLatLngs([[lat,lng],[dlat,dlng]]); line.setStyle({color:statusColor(v.status)})
+    } else if (line) { map.removeLayer(line); routeLines.delete(v.vehicleId) }
+  })
+  vehicleMarkers.forEach((mk, id) => { if (!alive.has(id)) { map.removeLayer(mk); vehicleMarkers.delete(id) } })
+  routeLines.forEach((line, id) => { if (!alive.has(id)) { map.removeLayer(line); routeLines.delete(id) } })
+}
+
+/** 绘制/更新交通异常（红色脉冲动画 marker） */
+function drawAnomalies() {
+  if (!map) return
+  const alive = new Set()
+  anomalies.value.forEach(a => {
+    alive.add(a.anomalyId)
+    const [lng, lat] = wgs84ToGcj02(a.longitude, a.latitude)
+    if (!anomalyMarkers.has(a.anomalyId)) {
+      const mk = L.marker([lat, lng], {icon: L.divIcon({className:'anomaly-icon',
+        html:'<i></i><b>⚠</b>', iconSize:[14,14], iconAnchor:[7,7]})}).addTo(map)
+      mk.bindTooltip(anomalyText(a.anomalyType), {direction:'right', offset:[10,0],
+        permanent:true, className:'anomaly-tip'})
+      anomalyMarkers.set(a.anomalyId, mk)
+    }
+  })
+  anomalyMarkers.forEach((mk, id) => { if (!alive.has(id)) { map.removeLayer(mk); anomalyMarkers.delete(id) } })
+}
+
+/** 首次拿到 POI/车辆后自动适配视野（只执行一次，之后由用户自由缩放拖动） */
+function fitOnce() {
+  if (!firstFit || !map) return
+  const pts = []
+  pois.value.forEach(p => { const [x,y] = wgs84ToGcj02(p.longitude, p.latitude); pts.push([y, x]) })
+  vehicles.value.forEach(v => { if (v.longitude != null) {
+    const [x,y] = wgs84ToGcj02(v.longitude, v.latitude); pts.push([y, x]) } })
+  if (pts.length) { map.fitBounds(L.latLngBounds(pts).pad(0.15)); firstFit = false }
 }
 
 /** 拉取一次沙盘快照与日志（轮询回调） */
@@ -232,6 +297,7 @@ async function tick() {
     anomalies.value = snap.anomalies || []
     Object.assign(status, snap.status)
     logs.value = (await http.get('/simulation/logs', {params:{limit:20}})).data
+    drawVehicles(); drawAnomalies(); fitOnce()
   } catch (e) {
     error.value = '无法连接后端（8888），请确认 Spring Boot 已启动。'
   }
@@ -255,10 +321,37 @@ async function resetSim() {
 
 let timer = null
 onMounted(async () => {
-  // POI 相对静态，进入页面加载一次即可
-  try { pois.value = (await http.get('/pois', {params:{limit:2000}})).data } catch (e) { /* 忽略，沙盘仍可显示车辆 */ }
+  initMap()                                   // 创建 Leaflet 地图（高德底图）
+  try {
+    pois.value = (await http.get('/pois', {params:{limit:2000}})).data
+    drawPois()                                // POI 相对静态，进入页面加载一次即可
+  } catch (e) { /* 忽略，沙盘仍可显示车辆 */ }
   await tick()
   timer = setInterval(tick, 1500) // 每 1.5 秒刷新一次快照
 })
 onUnmounted(() => clearInterval(timer))
 </script>
+
+<style scoped>
+.sim-map{width:100%;height:640px;border-radius:10px;border:1px solid #e2e8f0;background:#eef4fb}
+.map-panel .legend{z-index:1000}
+/* 车辆 marker 位置变化用过渡平滑衔接，实现“车在动”的效果 */
+.sim-map :deep(.leaflet-marker-icon){transition:transform 1.3s linear}
+/* 缩放动画期间沿用 Leaflet 自身的过渡曲线，避免拖慢瓦片级缩放 */
+.sim-map :deep(.leaflet-zoom-anim .leaflet-zoom-animated){transition:transform .25s cubic-bezier(0,0,.25,1)!important}
+.sim-map :deep(.veh-pin){position:relative;width:34px;height:34px}
+.sim-map :deep(.veh-tri){position:absolute;left:9px;top:5px;width:0;height:0;
+ border-left:8px solid transparent;border-right:8px solid transparent;border-bottom:20px solid var(--c);
+ filter:drop-shadow(0 1px 1px rgba(0,0,0,.35))}
+.sim-map :deep(.veh-plate){position:absolute;left:50%;top:26px;transform:translateX(-50%);white-space:nowrap;
+ font-size:11px;line-height:16px;padding:0 4px;background:rgba(255,255,255,.92);
+ border:1px solid #cbd5e1;border-radius:4px;color:#0f172a;pointer-events:none}
+.sim-map :deep(.anomaly-icon){position:relative}
+.sim-map :deep(.anomaly-icon b){position:absolute;left:2px;top:-6px;font-size:14px;color:#dc2626;
+ z-index:2;text-shadow:0 0 3px #fff}
+.sim-map :deep(.anomaly-icon i){position:absolute;left:1px;top:1px;width:12px;height:12px;
+ border:2px solid #dc2626;border-radius:50%;animation:anom 1.6s ease-out infinite}
+@keyframes anom{0%{transform:scale(.4);opacity:.9}100%{transform:scale(4);opacity:0}}
+.sim-map :deep(.anomaly-tip){background:#fee2e2;border:1px solid #fca5a5;color:#991b1b;font-weight:600}
+.sim-map :deep(.leaflet-control-layers){font-size:12px}
+</style>

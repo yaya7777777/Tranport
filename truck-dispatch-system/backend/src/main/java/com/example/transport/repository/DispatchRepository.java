@@ -93,4 +93,10 @@ public class DispatchRepository {
                 "SELECT DISTINCT vehicle_id FROM dispatch WHERE status IN ('DISPATCHED','IN_TRANSIT')",
                 Integer.class));
     }
+
+    /** 订单失效（软删除）时级联取消该订单的未完成调度记录，返回受影响行数 */
+    public int cancelByOrder(int orderId) {
+        return jdbc.update("UPDATE dispatch SET status = 'CANCELLED', actual_arrival = NOW() "
+                + "WHERE order_id = ? AND status IN ('DISPATCHED','IN_TRANSIT')", orderId);
+    }
 }
