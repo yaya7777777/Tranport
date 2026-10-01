@@ -28,21 +28,47 @@
 - JDK 17 及以上（本机用 Zulu JDK 25 编译 target 17）
 - Maven 3.9+（本机无系统 Maven，使用便携版 `C:\Users\Administrator\maven-portable\apache-maven-3.9.9\bin\mvn.cmd`，下文命令按自己实际路径替换即可）
 - Node.js 18+（推荐 20.19+；本机 v20.18.2 仅有 Vite 版本警告，可正常运行）
-- MySQL 5.7+ / MariaDB 10.4+（本机为 **XAMPP 自带 MariaDB 10.4.8，root 密码为空**，端口 3306）
+- MySQL 5.7+ / MariaDB 10.4+（本机为 **XAMPP 自带 MariaDB 10.4.8，root 密码为空**，端口 3306）。**XAMPP 只是其中一种选择**，用 MariaDB 官方 zip 版或独立安装的 MySQL 8 同样可以，只要把 root 密码与 `application.properties` 里的 `spring.datasource.password` 保持一致即可。
 - Python 3.8+（仅运行两个工具脚本时需要，实机模式额外 `pip install pymodbus requests`）
 
 ## 四、启动步骤（按顺序）
 
 ### 1. 初始化数据库
 
-用命令行或 Navicat 依次执行（`schema_v2.sql` 会 DROP 并重建 `transport` 库，已有数据请先备份）：
+用命令行或 Navicat 依次执行（`schema_v2.sql` 会 DROP 并重建 `transport` 库，已有数据请先备份）。
+
+**方式一：cmd（或双击 .bat）**，用 `<` 重定向：
 
 ```bat
 C:\xampp\mysql\bin\mysql.exe -uroot < database\schema_v2.sql
 C:\xampp\mysql\bin\mysql.exe -uroot transport < database\demo_data.sql
 ```
 
+**方式二：PowerShell** —— 注意 **PowerShell 不支持 `<` 重定向**（会报"`<` 运算符保留供将来使用"），改用 `mysql` 自带的 `source` 命令，且路径要用**正斜杠**；同时务必带 `--default-character-set=utf8mb4`，否则中文会变 `???`：
+
+```powershell
+$mysql = 'C:\xampp\mysql\bin\mysql.exe'
+$db    = 'E:\zongshe\Tranport-main\Tranport-main\truck-dispatch-system\database'
+$dbSql = $db -replace '\\','/'      # source 命令需要正斜杠
+
+& $mysql -uroot -p123456 --default-character-set=utf8mb4 -e "source $dbSql/schema_v2.sql"
+& $mysql -uroot -p123456 --default-character-set=utf8mb4 -e "source $dbSql/demo_data.sql"
+```
+
 执行后自带演示数据：12 辆车、12 名司机、5 类货物、5 种车型、36 个 POI（6 类）、13 条匹配规则、6 条厂仓关系、10 条常跑路线、6 状态转换规则、3 张演示订单。
+
+**已有旧库的补充迁移（新装可跳过）：**
+
+`schema_v2.sql` 中的 `dispatch` 表已包含"一车多单"兜底用的生成列与唯一索引。若你用的是**本次变更之前建的库**（不想 DROP 重建、想保留数据），补执行一次即可：
+
+```sql
+ALTER TABLE dispatch
+  ADD COLUMN active_vehicle_id INT GENERATED ALWAYS AS
+    (CASE WHEN status IN ('DISPATCHED','IN_TRANSIT') THEN vehicle_id ELSE NULL END) VIRTUAL,
+  ADD UNIQUE KEY uk_dispatch_active_vehicle (active_vehicle_id);
+```
+
+该列只对"未完成"的调度记录填值，已完成/已取消为 `NULL`，而 `NULL` 不参与唯一性判断，因此约束只作用于"同一辆车不能同时有两条未完成任务"，不影响历史数据。
 
 **扩展 POI 到 1000 条（评级"良"，可选）：**
 
@@ -61,7 +87,7 @@ Get-Content database\poi_generated.sql -Raw -Encoding UTF8 | C:\xampp\mysql\bin\
 server.port=8888
 spring.datasource.url=jdbc:mysql://localhost:3306/transport?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
 spring.datasource.username=root
-spring.datasource.password=          # XAMPP 默认为空；独立 MySQL 改成你的密码
+spring.datasource.password=123456    # 必须与这里保持一致；XAMPP 默认为空密码，独立安装的 MySQL/MariaDB 改成你实际设置的密码
 ```
 
 启动：
@@ -117,17 +143,20 @@ python tools/poi_crawler.py --mode amap --key 你的高德Key   :: 真实高德 
 | --- | --- | --- |
 | GET | `/api/dashboard/health`、`/api/dashboard/stats` | 健康检查、11 项看板统计 |
 | GET | `/api/vehicles` | 车辆多表 JOIN 列表 |
-| GET | `/api/orders` | 订单联合查询 |
-| GET | `/api/pois`、`/api/poi/categories` | POI 分页/搜索、6 分类计数 |
-| GET | `/api/master/vehicle-types`、`/cargo-categories`、`/match/matrix`、`/match/types` | 基础数据与匹配矩阵 |
+| GET | `/api/orders` | 订单联合查询，支持筛选与分页：`?status=PENDING&priority=1&limit=10&offset=0`（参数均可选；带 `limit` 时响应头 `X-Total-Count` 返回筛选后总条数） |
+| GET | `/api/pois`、`/api/poi-categories` | POI 分页/搜索、6 分类计数 |
+| GET | `/api/vehicle-types`、`/api/cargo-categories` | 车型、货物分类基础数据 |
 | GET | `/api/match/vehicles?orderId=` | **车型-货物匹配评分**（候选车+评分+理由） |
-| POST | `/api/dispatch/assign` | 人工/自动统一派车（body：`{"orderId":1,"vehicleId":4}`），事务写 dispatch+订单+回写路线 |
+| GET | `/api/match/matrix`、`/api/match/types?categoryId=&weight=&volume=` | 货物分类×车型匹配矩阵、按分类筛选可装车型 |
+| POST | `/api/dispatch/assign` | 人工/自动统一派车（body：`{"orderId":1,"vehicleId":4}`），事务写 dispatch+订单+回写路线；派车前校验订单状态、车辆空闲与整单载重/容积 |
+| POST | `/api/dispatch/auto?max=20` | **一键自动派单**：按优先级顺序为每张待处理订单挑评分最高的空闲车，单张失败只跳过并说明原因 |
+| POST | `/api/dispatch/{orderId}/cancel` | **撤单/改派**：取消该订单未完成的调度、释放车辆、订单回到 PENDING |
 | POST | `/api/gps/report` | 北斗模块 HTTP+JSON 上报 |
 | GET | `/api/gps/latest`、`/api/gps/history?vehicleId=` | 最新定位、单车轨迹 |
 | POST | `/api/simulation/start`、`/stop`、`/reset` | 仿真生命周期（start body：`{"vehicleCount":12,"autoOrders":true}`） |
 | GET | `/api/simulation/status`、`/snapshot`、`/logs` | 状态计数、沙盘快照（车辆+异常）、状态变更时间线 |
 
-统一返回包装 `ApiResult{success,message,data}`；全局 CORS 在 `config/CorsConfig.java` 配置，无需在控制器重复 `@CrossOrigin`。
+统一返回包装 `ApiResult{success,message,data}`；全局 CORS 在 `config/CorsConfig.java` 配置，无需在控制器重复 `@CrossOrigin`（该配置已通过 `exposedHeaders` 暴露分页用的 `X-Total-Count` 响应头）。
 
 ## 七、仿真引擎说明
 

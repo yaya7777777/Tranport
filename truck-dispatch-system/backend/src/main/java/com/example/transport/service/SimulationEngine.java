@@ -410,7 +410,8 @@ public class SimulationEngine {
             if (!compatTypes.getOrDefault(order.categoryId(), Set.of()).contains(a.typeId)) {
                 continue; // 货物分类与车型不匹配
             }
-            if (a.maxLoad < order.weight() || a.maxVolume < order.volume()) {
+            // cargo.weight/volume 是单件重量与体积，须用整单总量比较（totalWeight/totalVolume 已乘数量）
+            if (a.maxLoad < order.totalWeight() || a.maxVolume < order.totalVolume()) {
                 continue; // 载重或容积不足
             }
             GisService.Point originPoint = pointOf(order.originPoiId());
@@ -419,6 +420,10 @@ public class SimulationEngine {
             }
             double distance = gisService.distanceKm(a.pos, originPoint);
             double score = 30 * Math.exp(-distance / 25.0); // 离发货地越近分越高
+            // 订单紧急度：priority 1(高)/2(中)/3(低) -> +30/+15/+0。
+            // 缺了这一项时 priority 完全不参与决策（上面 SQL 的 ORDER BY priority 会被
+            // "取最高分"的循环逻辑抹掉），加急订单与普通订单没有区别。
+            score += (3 - order.priority()) * 15;
             if (Boolean.TRUE.equals(preferred.getOrDefault(order.categoryId(), Map.of()).get(a.typeId))) {
                 score += 25; // 优选车型
             } else {

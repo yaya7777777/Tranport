@@ -26,6 +26,9 @@ public class CorsConfig implements WebMvcConfigurer {
                 .allowedOriginPatterns("*")            // 允许任意来源（课程演示环境；生产环境应指定具体域名）
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS") // 允许的 HTTP 方法
                 .allowedHeaders("*")                   // 允许任意请求头
+                // 暴露分页总数头：跨域下浏览器默认只放行少数"简单响应头"，
+                // 不显式暴露的话前端 JS 读不到 X-Total-Count，分页控件会失效
+                .exposedHeaders("X-Total-Count")
                 .maxAge(3600);                         // 预检请求缓存 1 小时，减少 OPTIONS 探测
     }
 }

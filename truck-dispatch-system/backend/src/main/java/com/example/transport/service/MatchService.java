@@ -110,7 +110,8 @@ public class MatchService {
                 continue;
             }
             Boolean preferred = ruleMap.getOrDefault(order.categoryId(), Map.of()).get(v.typeId());
-            if (preferred == null || v.maxLoad() < order.weight() || v.maxVolume() < order.volume()) {
+            // cargo.weight/volume 是单件重量与体积，须用整单总量比较（totalWeight/totalVolume 已乘数量）
+            if (preferred == null || v.maxLoad() < order.totalWeight() || v.maxVolume() < order.totalVolume()) {
                 continue;
             }
 
@@ -126,8 +127,8 @@ public class MatchService {
                 reasons.add("车型可装 +10");
             }
 
-            // 2) 运力贴合度（+20）：载重利用率落在 60%-95% 最经济
-            double loadRatio = order.weight() / v.maxLoad();
+            // 2) 运力贴合度（+20）：载重利用率落在 60%-95% 最经济（按整单总重计算）
+            double loadRatio = order.totalWeight() / v.maxLoad();
             if (loadRatio >= 0.6 && loadRatio <= 0.95) {
                 score += 20;
                 reasons.add("载重利用率 " + Math.round(loadRatio * 100) + "%，运力贴合 +20");

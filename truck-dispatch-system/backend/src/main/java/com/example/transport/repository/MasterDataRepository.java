@@ -156,6 +156,20 @@ public class MasterDataRepository {
     /** 厂仓关系内部对象 */
     public record FactoryRelation(int factoryId, int warehouseId, String relationType,
                                   int factoryPoiId, int warehousePoiId) {
+
+        /**
+         * 货物流向的起点 POI：采购(PROCURE) 是"仓库 -> 工厂"（原料流入工厂），
+         * 生产(PRODUCE)/销售(SALE) 是"工厂 -> 仓库"。
+         * 判断收敛在此处，人工建单与仿真自动建单共用，避免两处逻辑不一致。
+         */
+        public int originPoiId() {
+            return "PROCURE".equals(relationType) ? warehousePoiId : factoryPoiId;
+        }
+
+        /** 货物流向的终点 POI，规则见 {@link #originPoiId()} */
+        public int destPoiId() {
+            return "PROCURE".equals(relationType) ? factoryPoiId : warehousePoiId;
+        }
     }
 
     /* ====================== 主数据存在性校验（管理类写接口用） ====================== */

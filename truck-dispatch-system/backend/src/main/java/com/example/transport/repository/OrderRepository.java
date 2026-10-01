@@ -25,31 +25,97 @@ public class OrderRepository {
      * 待派单/在途订单（含货物重量体积、起终点 ID 与名称），匹配算法的输入对象。
      */
     public record PendingOrder(int orderId, String orderNo, int cargoId, String cargoName, int categoryId,
-                               double weight, double volume, int originPoiId, int destPoiId,
+                               double quantity, double weight, double volume, int originPoiId, int destPoiId,
                                Integer routeId, int priority, String originName, String destName) {
+
+        /** 整单总重量(kg)。cargo.weight 是单件重量，必须乘以订单数量 */
+        public double totalWeight() {
+            return weight * quantity;
+        }
+
+        /** 整单总体积(m³)。cargo.volume 是单件体积，必须乘以订单数量 */
+        public double totalVolume() {
+            return volume * quantity;
+        }
     }
 
     /** 订单列表页：订单 + 货物 + POI + 路线 + 调度 + 司机 + 车型 的多表联合查询 */
     public List<OrderSummary> findAll() {
+        return findAll(null, null, null, 0);
+    }
+
+    /** 订单列表分页查询的总条数（与 findAll 使用完全相同的筛选条件） */
+    public long countOrders(String status, Integer priority) {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM cargo_order co "
+                + whereClause(status, priority), Long.class, filterArgs(status, priority));
+    }
+
+    /**
+     * 订单列表查询：支持按订单状态、优先级筛选与分页。
+     *
+     * @param status   订单状态（PENDING/ASSIGNED/...），null 或空 = 不筛选
+     * @param priority 优先级（1高/2中/3低），null = 不筛选
+     * @param limit    每页条数，null 或 &lt;=0 = 不分页
+     * @param offset   起始偏移，从 0 开始
+     */
+    public List<OrderSummary> findAll(String status, Integer priority, Integer limit, int offset) {
+        // 注意 dis 的 JOIN 条件必须带状态过滤：一个订单历史上可能有多条调度记录
+        // （取消/完成 + 当前有效），不带过滤会让同一订单在列表里重复出现多行。
         String sql = "SELECT co.order_id,co.order_no,c.cargo_name,cc.category_name cargo_type,co.quantity,"
                 + "p1.poi_name origin,p2.poi_name destination,r.distance,r.estimated_time,d.name driver_name,v.plate_number,"
                 + "vt.type_name vehicle_type,co.status order_status,dis.status dispatch_status FROM cargo_order co "
                 + "JOIN cargo c ON co.cargo_id=c.cargo_id JOIN cargo_category cc ON c.category_id=cc.category_id "
                 + "JOIN poi p1 ON co.origin_poi_id=p1.poi_id JOIN poi p2 ON co.destination_poi_id=p2.poi_id "
-                + "LEFT JOIN route r ON co.route_id=r.route_id LEFT JOIN dispatch dis ON co.order_id=dis.order_id "
+                + "LEFT JOIN route r ON co.route_id=r.route_id "
+                + "LEFT JOIN dispatch dis ON co.order_id=dis.order_id "
+                + "AND dis.status IN ('DISPATCHED','IN_TRANSIT','COMPLETED') "
                 + "LEFT JOIN driver d ON dis.driver_id=d.driver_id LEFT JOIN vehicle v ON dis.vehicle_id=v.vehicle_id "
-                + "LEFT JOIN vehicle_type vt ON v.type_id=vt.type_id ORDER BY co.order_id DESC";
-        return jdbc.query(sql, (rs, n) -> new OrderSummary(rs.getInt("order_id"), rs.getString("order_no"),
+                + "LEFT JOIN vehicle_type vt ON v.type_id=vt.type_id "
+                + whereClause(status, priority)
+                + " ORDER BY co.order_id DESC";
+        // limit/offset 已由服务端 Integer 校验并钳位，非用户自由文本，直接拼入 SQL
+        if (limit != null && limit > 0) {
+            sql += " LIMIT " + limit + " OFFSET " + Math.max(0, offset);
+        }
+        return jdbc.query(sql, orderSummaryMapper(), filterArgs(status, priority));
+    }
+
+    /** 筛选条件：状态为空表示不限，其余为占位符参数 */
+    private String whereClause(String status, Integer priority) {
+        StringBuilder sb = new StringBuilder(" WHERE 1=1");
+        if (status != null && !status.isBlank()) {
+            sb.append(" AND co.status = ?");
+        }
+        if (priority != null) {
+            sb.append(" AND co.priority = ?");
+        }
+        return sb.toString();
+    }
+
+    private Object[] filterArgs(String status, Integer priority) {
+        java.util.List<Object> args = new java.util.ArrayList<>();
+        if (status != null && !status.isBlank()) {
+            args.add(status);
+        }
+        if (priority != null) {
+            args.add(priority);
+        }
+        return args.toArray();
+    }
+
+    /** OrderSummary 结果集映射（列表查询与分页查询共用） */
+    private org.springframework.jdbc.core.RowMapper<OrderSummary> orderSummaryMapper() {
+        return (rs, n) -> new OrderSummary(rs.getInt("order_id"), rs.getString("order_no"),
                 rs.getString("cargo_name"), rs.getString("cargo_type"), rs.getObject("quantity", Double.class),
                 rs.getString("origin"), rs.getString("destination"), rs.getObject("distance", Double.class),
                 rs.getObject("estimated_time", Integer.class), rs.getString("driver_name"), rs.getString("plate_number"),
-                rs.getString("vehicle_type"), rs.getString("order_status"), rs.getString("dispatch_status")));
+                rs.getString("vehicle_type"), rs.getString("order_status"), rs.getString("dispatch_status"));
     }
 
     /** 查询全部待处理（PENDING）订单，按优先级、下单时间排序 */
     public List<PendingOrder> findPendingOrders() {
         String sql = "SELECT co.order_id, co.order_no, co.cargo_id, c.cargo_name, c.category_id, "
-                + "c.weight, c.volume, co.origin_poi_id, co.destination_poi_id, co.route_id, co.priority, "
+                + "co.quantity, c.weight, c.volume, co.origin_poi_id, co.destination_poi_id, co.route_id, co.priority, "
                 + "p1.poi_name AS origin_name, p2.poi_name AS dest_name "
                 + "FROM cargo_order co "
                 + "JOIN cargo c ON co.cargo_id = c.cargo_id "
@@ -62,6 +128,7 @@ public class OrderRepository {
                 rs.getInt("cargo_id"),
                 rs.getString("cargo_name"),
                 rs.getInt("category_id"),
+                rs.getDouble("quantity"),
                 rs.getDouble("weight"),
                 rs.getDouble("volume"),
                 rs.getInt("origin_poi_id"),
@@ -75,7 +142,7 @@ public class OrderRepository {
     /** 按主键查订单详情（含匹配所需的重量体积/起终点），不存在返回 null。任意状态均可查到。 */
     public PendingOrder findOrderById(int orderId) {
         String sql = "SELECT co.order_id, co.order_no, co.cargo_id, c.cargo_name, c.category_id, "
-                + "c.weight, c.volume, co.origin_poi_id, co.destination_poi_id, co.route_id, co.priority, "
+                + "co.quantity, c.weight, c.volume, co.origin_poi_id, co.destination_poi_id, co.route_id, co.priority, "
                 + "p1.poi_name AS origin_name, p2.poi_name AS dest_name "
                 + "FROM cargo_order co "
                 + "JOIN cargo c ON co.cargo_id = c.cargo_id "
@@ -84,8 +151,8 @@ public class OrderRepository {
                 + "WHERE co.order_id = ?";
         List<PendingOrder> any = jdbc.query(sql, (rs, n) -> new PendingOrder(
                 rs.getInt("order_id"), rs.getString("order_no"), rs.getInt("cargo_id"),
-                rs.getString("cargo_name"), rs.getInt("category_id"), rs.getDouble("weight"),
-                rs.getDouble("volume"), rs.getInt("origin_poi_id"), rs.getInt("destination_poi_id"),
+                rs.getString("cargo_name"), rs.getInt("category_id"), rs.getDouble("quantity"),
+                rs.getDouble("weight"), rs.getDouble("volume"), rs.getInt("origin_poi_id"), rs.getInt("destination_poi_id"),
                 (Integer) rs.getObject("route_id"), rs.getInt("priority"),
                 rs.getString("origin_name"), rs.getString("dest_name")), orderId);
         return any.isEmpty() ? null : any.get(0);

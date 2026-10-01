@@ -71,19 +71,11 @@ public class OrderGeneratorService {
             MasterDataRepository.FactoryRelation rel = relations.get(random.nextInt(relations.size()));
             CargoOption cargo = cargos.get(random.nextInt(cargos.size()));
 
-            // 按关系类型决定货物流向
-            int originPoiId;
-            int destPoiId;
-            String relationText;
-            if ("PROCURE".equals(rel.relationType())) {
-                originPoiId = rel.warehousePoiId();
-                destPoiId = rel.factoryPoiId();
-                relationText = "采购（仓库->工厂）";
-            } else {
-                originPoiId = rel.factoryPoiId();
-                destPoiId = rel.warehousePoiId();
-                relationText = "PRODUCE".equals(rel.relationType()) ? "生产（工厂->成品仓）" : "销售（工厂->外运仓）";
-            }
+            // 货物流向：采购(仓->厂) / 生产、销售(厂->仓)，由 FactoryRelation 统一判定
+            int originPoiId = rel.originPoiId();
+            int destPoiId = rel.destPoiId();
+            String relationText = "PROCURE".equals(rel.relationType()) ? "采购（仓库->工厂）"
+                    : "PRODUCE".equals(rel.relationType()) ? "生产（工厂->成品仓）" : "销售（工厂->外运仓）";
 
             PoiSummary origin = poiRepository.findById(originPoiId);
             PoiSummary dest = poiRepository.findById(destPoiId);

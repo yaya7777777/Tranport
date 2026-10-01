@@ -99,4 +99,14 @@ public class DispatchRepository {
         return jdbc.update("UPDATE dispatch SET status = 'CANCELLED', actual_arrival = NOW() "
                 + "WHERE order_id = ? AND status IN ('DISPATCHED','IN_TRANSIT')", orderId);
     }
+
+    /**
+     * 查询占用某订单的车辆 ID（仅未完成的调度任务），没有则返回 null。
+     * 撤单/改派时用它定位需要释放的车辆。
+     */
+    public Integer findActiveVehicleId(int orderId) {
+        var list = jdbc.queryForList("SELECT vehicle_id FROM dispatch WHERE order_id = ? "
+                + "AND status IN ('DISPATCHED','IN_TRANSIT') LIMIT 1", Integer.class, orderId);
+        return list.isEmpty() ? null : list.get(0);
+    }
 }
