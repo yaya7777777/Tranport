@@ -1,0 +1,86 @@
+运输车辆调度优化与仿真系统 —— 项目文件结构
+====================================================================
+
+truck-dispatch-system/
+├── README.md                              启动指南/接口清单/评级对照/问题排查
+├── PROJECT_TREE.txt                       本文件
+│
+├── database/                              数据库脚本
+│   ├── schema_v2.sql                      20 张表 + 3 个视图（DROP/CREATE transport）
+│   ├── demo_data.sql                      演示数据：12车/12司机/36 POI/规则/厂仓/路线
+│   └── poi_generated.sql                  POI 爬虫离线生成的 1000 条 POI（幂等，可重复导入）
+│
+├── tools/                                 Python 工具（任务书模块①②）
+│   ├── modbus_collector.py                北斗采集器：mock 模拟 / real 经 RS485-Modbus 实读，HTTP+JSON 上报
+│   └── poi_crawler.py                     POI 爬虫：offline 离线生成 500/1000 条 / amap 高德真实抓取
+│
+├── backend/                               Spring Boot 3 后端（端口 8888）
+│   ├── pom.xml
+│   └── src/main/
+│       ├── resources/
+│       │   └── application.properties     数据源/XAMPP空密码/仿真节拍/高德Key 配置
+│       └── java/com/example/transport/
+│           ├── TransportApplication.java  启动类（@EnableScheduling 驱动仿真节拍）
+│           │
+│           ├── config/
+│           │   ├── CorsConfig.java                 全局跨域配置
+│           │   └── GlobalExceptionHandler.java     统一异常→ApiResult（含堆栈日志）
+│           │
+│           ├── controller/                 控制层
+│           │   ├── DashboardController.java        看板 /api/dashboard
+│           │   ├── VehicleController.java          车辆 /api/vehicles
+│           │   ├── OrderController.java            订单 /api/orders
+│           │   ├── PoiController.java              POI 与分类 /api/pois、/api/poi
+│           │   ├── MatchController.java            车型-货物匹配 /api/match
+│           │   ├── DispatchController.java         派车 /api/dispatch
+│           │   ├── GpsController.java              北斗上报与轨迹 /api/gps
+│           │   └── SimulationController.java       仿真控制/快照/日志 /api/simulation
+│           │
+│           ├── service/                    业务层
+│           │   ├── GisService.java                 距离/方位角/插值/路线解析（无Key时直线估算降级）
+│           │   ├── MatchService.java               车型-货物综合评分匹配函数
+│           │   ├── DispatchService.java            事务化派车（人工/仿真共用）
+│           │   ├── GpsService.java                  上报校验/车牌反查/落库
+│           │   ├── OrderGeneratorService.java      按厂仓关系自动补给货源订单
+│           │   └── SimulationEngine.java           6状态节拍仿真引擎（核心，含Agent/Trip/异常运行时）
+│           │
+│           ├── repository/                 持久层（JdbcTemplate，无 JPA/MyBatis）
+│           │   ├── DashboardRepository.java
+│           │   ├── VehicleRepository.java          车辆查询/仿真状态更新/全量置空闲
+│           │   ├── OrderRepository.java            订单查询/状态流转/复位重开
+│           │   ├── PoiRepository.java              POI 分页搜索
+│           │   ├── MasterDataRepository.java       车型/货物/匹配规则/状态规则表
+│           │   ├── DispatchRepository.java         调度写入/接续/完成/取消/忙车集合
+│           │   ├── RouteRepository.java            路线查询回写/交通异常生灭
+│           │   ├── GpsRepository.java              gps_data 写入/最新/历史
+│           │   └── SimulationRepository.java       仿真记录/状态变更日志
+│           │
+│           └── dto/                        数据传输对象（Java record）
+│               ├── ApiResult.java                  统一返回 {success,message,data}
+│               ├── DashboardStats.java             看板 11 项统计
+│               ├── VehicleSummary.java
+│               ├── OrderSummary.java
+│               ├── PoiSummary.java / CategoryCount.java
+│               ├── VehicleTypeView.java / CargoCategoryView.java / CargoOption.java
+│               ├── MatchMatrix.java / MatchTypeResult.java / MatchResult.java
+│               ├── RouteInfo.java
+│               ├── DispatchRequest.java
+│               ├── GpsReport.java / GpsPoint.java
+│               ├── SimStartRequest.java
+│               ├── SimulationStatus.java / SimulationSnapshot.java
+│               ├── VehiclePosition.java / AnomalyView.java / StatusLogView.java
+│
+└── frontend/                              Vue 3 + Vite 前端（端口 5173）
+    ├── package.json / vite.config.js / index.html
+    └── src/
+        ├── main.js                        路由（6 页面）
+        ├── App.vue                        顶部导航
+        ├── api/http.js                    axios 实例（baseURL http://localhost:8888）
+        ├── assets/main.css                全部样式（状态色/沙盘/匹配面板等）
+        └── views/
+            ├── Dashboard.vue              调度看板（11 卡片）
+            ├── Vehicles.vue               车辆管理（6 状态色标签）
+            ├── Orders.vue                 订单 + 待处理单智能匹配/派车面板
+            ├── Simulation.vue             SVG 仿真沙盘（POI/车辆/路线/异常/图层过滤/时间线）
+            ├── MasterData.vue             POI 分类进度/车型/货-车匹配矩阵/POI 列表
+            └── GpsMonitor.vue             实机/仿真定位列表 + 单车轨迹折线
