@@ -110,7 +110,8 @@ public class MatchService {
                 continue;
             }
             Boolean preferred = ruleMap.getOrDefault(order.categoryId(), Map.of()).get(v.typeId());
-            if (preferred == null || v.maxLoad() < order.weight() || v.maxVolume() < order.volume()) {
+            // cargo.weight/volume 是单件重量与体积，须用整单总量比较（totalWeight/totalVolume 已乘数量）
+            if (preferred == null || v.maxLoad() < order.totalWeight() || v.maxVolume() < order.totalVolume()) {
                 continue;
             }
 
@@ -126,8 +127,8 @@ public class MatchService {
                 reasons.add("车型可装 +10");
             }
 
-            // 2) 运力贴合度（+20）：载重利用率落在 60%-95% 最经济
-            double loadRatio = order.weight() / v.maxLoad();
+            // 2) 运力贴合度（+20）：载重利用率落在 60%-95% 最经济（按整单总重计算）
+            double loadRatio = order.totalWeight() / v.maxLoad();
             if (loadRatio >= 0.6 && loadRatio <= 0.95) {
                 score += 20;
                 reasons.add("载重利用率 " + Math.round(loadRatio * 100) + "%，运力贴合 +20");
@@ -140,6 +141,7 @@ public class MatchService {
             }
 
             // 3) 车辆当前位置到发货地的距离（指数衰减，最高 +30）
+            //    全省调度：衰减半径 200km，让省内任意市州的车辆都能参与打分，近的优先
             double distanceToOrigin = Double.MAX_VALUE;
             String currentPoiName = "途中";
             if (v.lng() != null && v.lat() != null) {
@@ -153,7 +155,7 @@ public class MatchService {
                     currentPoiName = cur.poiName();
                 }
             }
-            double distanceScore = 30 * Math.exp(-distanceToOrigin / 25.0);
+            double distanceScore = 30 * Math.exp(-distanceToOrigin / 200.0);
             score += distanceScore;
             reasons.add("距发货地约 " + Math.round(distanceToOrigin) + " km +" + Math.round(distanceScore));
 
@@ -163,17 +165,17 @@ public class MatchService {
                 reasons.add("司机常跑该路线 +15");
             }
 
-            // 5) 续航能否支撑往返（+10 / +5 / 0）
+            // 5) 续航能否支撑单程（全省长途中途可加油，不要求往返）
             double estRange = v.fuelConsumption() > 0
                     ? v.fuel() / (v.fuelConsumption() / 100.0) : 0;
-            if (estRange >= routeDistance * 2) {
+            if (estRange >= routeDistance) {
                 score += 10;
-                reasons.add("续航充足 +10");
-            } else if (estRange >= routeDistance) {
+                reasons.add("续航充足（可跑单程） +10");
+            } else if (estRange >= routeDistance * 0.6) {
                 score += 5;
-                reasons.add("续航仅够单程 +5");
+                reasons.add("续航接近单程，建议途中加油 +5");
             } else {
-                reasons.add("续航不足，建议先加油 +0");
+                reasons.add("续航不足，需先加油 +0");
             }
 
             results.add(new MatchResult(v.vehicleId(), v.plate(), v.typeName(), v.driverName(),

@@ -87,8 +87,9 @@ public class FleetManagementService {
         double quantity = req.quantity() == null || req.quantity() <= 0 ? 1 : req.quantity();
         int priority = req.priority() == null ? 2 : req.priority();
 
-        PoiSummary origin = poiRepository.findById(rel.factoryPoiId());
-        PoiSummary dest = poiRepository.findById(rel.warehousePoiId());
+        // 起终点按厂仓关系类型决定（采购为仓->厂，生产/销售为厂->仓），由 FactoryRelation 统一判定
+        PoiSummary origin = poiRepository.findById(rel.originPoiId());
+        PoiSummary dest = poiRepository.findById(rel.destPoiId());
         if (origin == null || dest == null) {
             throw new IllegalArgumentException("工厂或仓库关联的 POI 站点缺失，请先补全基础数据");
         }
@@ -100,7 +101,7 @@ public class FleetManagementService {
                 + String.format("%02d", random.nextInt(100));
         String remark = (req.remark() == null || req.remark().isBlank() ? "人工创建" : req.remark().trim());
         return orderRepository.insertGeneratedOrder(orderNo, req.cargoId(), quantity,
-                rel.factoryPoiId(), rel.warehousePoiId(), route.routeId(), now, now.plusHours(6), priority, remark);
+                rel.originPoiId(), rel.destPoiId(), route.routeId(), now, now.plusHours(6), priority, remark);
     }
 
     /* ====================== 2) 失效需求（软删除） ====================== */

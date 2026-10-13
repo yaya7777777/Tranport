@@ -12,8 +12,14 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 
 /**
  * 货源订单自动生成服务（任务书第 3 项："货源地生成、工厂与货源关系处理（采购、生产、销售）"）。
@@ -37,6 +43,42 @@ public class OrderGeneratorService {
 
     /** 固定随机种子，便于演示结果可复现；如需每次不同可改为 new Random() */
     private final Random random = new Random(20260915);
+
+    /** 工厂类型 → 可生产的货物分类 ID（如机车厂不能产生鲜食品） */
+    private static final Map<String, Set<Integer>> FACTORY_CARGO_MAP = new HashMap<>();
+    /** 仓库类型 → 可存放的货物分类 ID（如冷库只放生鲜） */
+    private static final Map<String, Set<Integer>> WAREHOUSE_CARGO_MAP = new HashMap<>();
+
+    static {
+        // 工厂类型映射
+        FACTORY_CARGO_MAP.put("食品厂", Set.of(1));            // 生鲜食品
+        FACTORY_CARGO_MAP.put("建材厂", Set.of(2));            // 建材
+        FACTORY_CARGO_MAP.put("电子厂", Set.of(3));            // 电子产品
+        FACTORY_CARGO_MAP.put("加工厂", Set.of(4, 5));         // 化工品、日用品
+        FACTORY_CARGO_MAP.put("制造厂", Set.of(2, 4, 5));      // 建材、化工品、日用品
+        FACTORY_CARGO_MAP.put("组装厂", Set.of(3, 5));         // 电子产品、日用品
+        // 仓库类型映射
+        WAREHOUSE_CARGO_MAP.put("冷库", Set.of(1));            // 生鲜食品
+        WAREHOUSE_CARGO_MAP.put("原料仓", Set.of(2, 4));       // 建材、化工品
+        WAREHOUSE_CARGO_MAP.put("成品仓", Set.of(3, 5));       // 电子产品、日用品
+        WAREHOUSE_CARGO_MAP.put("电商仓", Set.of(3, 5));       // 电子产品、日用品
+        WAREHOUSE_CARGO_MAP.put("中转仓", Set.of(1, 2, 3, 4, 5)); // 综合
+        WAREHOUSE_CARGO_MAP.put("综合仓", Set.of(1, 2, 3, 4, 5)); // 综合
+    }
+
+    /**
+     * 计算某厂仓关系允许的货物分类 ID 集合 = 工厂可生产 ∩ 仓库可存放。
+     * 若交集为空（如加工厂+冷库），返回空集合，由调用方跳过该条关系。
+     */
+    private Set<Integer> allowedCategoryIds(String factoryType, String warehouseType) {
+        Set<Integer> fac = FACTORY_CARGO_MAP.getOrDefault(factoryType,
+                Set.of(1, 2, 3, 4, 5));
+        Set<Integer> wh = WAREHOUSE_CARGO_MAP.getOrDefault(warehouseType,
+                Set.of(1, 2, 3, 4, 5));
+        Set<Integer> intersection = new HashSet<>(fac);
+        intersection.retainAll(wh);
+        return intersection;
+    }
 
     public OrderGeneratorService(MasterDataRepository masterDataRepository, OrderRepository orderRepository,
                                  PoiRepository poiRepository, GisService gisService) {
@@ -67,23 +109,29 @@ public class OrderGeneratorService {
 
         int need = (int) Math.min(maxAdd, minPending - pending);
         int created = 0;
-        for (int i = 0; i < need; i++) {
+        int attempts = 0;
+        while (created < need && attempts < need * 10) {
+            attempts++;
             MasterDataRepository.FactoryRelation rel = relations.get(random.nextInt(relations.size()));
-            CargoOption cargo = cargos.get(random.nextInt(cargos.size()));
 
-            // 按关系类型决定货物流向
-            int originPoiId;
-            int destPoiId;
-            String relationText;
-            if ("PROCURE".equals(rel.relationType())) {
-                originPoiId = rel.warehousePoiId();
-                destPoiId = rel.factoryPoiId();
-                relationText = "采购（仓库->工厂）";
-            } else {
-                originPoiId = rel.factoryPoiId();
-                destPoiId = rel.warehousePoiId();
-                relationText = "PRODUCE".equals(rel.relationType()) ? "生产（工厂->成品仓）" : "销售（工厂->外运仓）";
+            // 按工厂类型 ∩ 仓库类型筛选可运输的货物分类
+            Set<Integer> allowed = allowedCategoryIds(rel.factoryType(), rel.warehouseType());
+            List<CargoOption> matched = new ArrayList<>();
+            for (CargoOption c : cargos) {
+                if (allowed.contains(c.categoryId())) {
+                    matched.add(c);
+                }
             }
+            if (matched.isEmpty()) {
+                continue; // 该组厂仓类型无匹配货物，跳过
+            }
+            CargoOption cargo = matched.get(random.nextInt(matched.size()));
+
+            // 货物流向：采购(仓->厂) / 生产、销售(厂->仓)，由 FactoryRelation 统一判定
+            int originPoiId = rel.originPoiId();
+            int destPoiId = rel.destPoiId();
+            String relationText = "PROCURE".equals(rel.relationType()) ? "采购（仓库->工厂）"
+                    : "PRODUCE".equals(rel.relationType()) ? "生产（工厂->成品仓）" : "销售（工厂->外运仓）";
 
             PoiSummary origin = poiRepository.findById(originPoiId);
             PoiSummary dest = poiRepository.findById(destPoiId);

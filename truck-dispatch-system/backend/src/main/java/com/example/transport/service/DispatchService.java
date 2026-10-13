@@ -6,6 +6,7 @@ import com.example.transport.repository.DispatchRepository;
 import com.example.transport.repository.OrderRepository;
 import com.example.transport.repository.PoiRepository;
 import com.example.transport.repository.VehicleRepository;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -70,6 +71,15 @@ public class DispatchService {
             throw new IllegalArgumentException("车辆 " + vehicle.plate() + " 已有未完成的调度任务");
         }
 
+        // 3.5) 运力兜底校验：整单总量必须装得下。
+        // 候选列表筛选只是前端展示层，本接口可能被直接调用，故执行派单前必须再校验一次，
+        // 否则会出现"640 吨货物派给 8 吨车"这类物理上不可能的调度。
+        if (vehicle.maxLoad() < order.totalWeight() || vehicle.maxVolume() < order.totalVolume()) {
+            throw new IllegalArgumentException("车辆 " + vehicle.plate() + " 载重 " + vehicle.maxLoad()
+                    + "kg / 容积 " + vehicle.maxVolume() + "m³，装不下整单 "
+                    + Math.round(order.totalWeight()) + "kg / " + Math.round(order.totalVolume()) + "m³");
+        }
+
         // 4) GIS 解析/补算路线
         PoiSummary origin = poiRepository.findById(order.originPoiId());
         PoiSummary dest = poiRepository.findById(order.destPoiId());
@@ -78,11 +88,46 @@ public class DispatchService {
         // 5) 写调度记录（预计到达 = 现在 + 路线预计耗时）
         LocalDateTime now = LocalDateTime.now();
         LocalDateTime eta = now.plusMinutes(route.estimatedTime());
-        dispatchRepository.insert(orderId, vehicleId, vehicle.driverId(), route.routeId(), now, eta);
+        try {
+            dispatchRepository.insert(orderId, vehicleId, vehicle.driverId(), route.routeId(), now, eta);
+        } catch (DuplicateKeyException e) {
+            // 并发兜底：uk_dispatch_active_vehicle 唯一索引拒绝"同一辆车同时两条未完成任务"。
+            // 上面的忙碌校验是"先查后写"，并非原子；并发时由数据库在这里拦下，转成业务提示。
+            throw new IllegalArgumentException("车辆 " + vehicle.plate()
+                    + " 刚被其它调度任务占用（并发冲突），请刷新后重试");
+        }
 
         // 6) 订单流转为 ASSIGNED 并回写路线
         orderRepository.updateStatus(orderId, "ASSIGNED", null);
         orderRepository.updateRoute(orderId, route.routeId());
         return route;
+    }
+
+    /**
+     * 撤单：取消该订单未完成的调度任务、释放车辆，并把订单放回待处理池。
+     * 撤单后订单状态回到 PENDING，可重新走"智能匹配"派给别的车，即完成改派。
+     *
+     * @return 结果说明（含被释放的调度单数量）
+     * @throws IllegalArgumentException 订单不存在或当前状态不可撤单
+     */
+    @Transactional
+    public String cancelDispatch(int orderId) {
+        String status = orderRepository.findStatusById(orderId);
+        if (status == null) {
+            throw new IllegalArgumentException("订单不存在：" + orderId);
+        }
+        if (!"ASSIGNED".equals(status) && !"TRANSPORTING".equals(status)) {
+            throw new IllegalArgumentException("订单当前为 " + status + " 状态，只有已分配/运输中的订单可撤单");
+        }
+        // 找出占用该订单的车辆，撤单后需将其释放回空闲
+        Integer vehicleId = dispatchRepository.findActiveVehicleId(orderId);
+        int cancelled = dispatchRepository.cancelByOrder(orderId);
+        if (vehicleId != null) {
+            vehicleRepository.updateCurrentStatus(vehicleId, "IDLE");
+        }
+        // 订单回到待处理池，清空实际送达时间
+        orderRepository.updateStatus(orderId, "PENDING", null);
+        return "撤单成功：取消 " + cancelled + " 条调度任务"
+                + (vehicleId == null ? "" : "，车辆 " + vehicleId + " 已释放为空闲");
     }
 }

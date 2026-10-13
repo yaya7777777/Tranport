@@ -36,15 +36,19 @@ import time
 import urllib.parse
 import urllib.request
 
-# (category_id, 分类名, 高德搜索关键词)
+# (category_id, 分类名, 高德搜索关键词)——对应 poi_category 1~7
 CATEGORIES = [
     (1, "工厂", "工厂|制造厂|加工厂"),
     (2, "仓库", "仓库|仓储"),
     (3, "加油站", "加油站"),
+    (4, "收费站", "收费站"),
     (5, "停车场", "停车场"),
     (6, "物流中心", "物流中心|物流园|货运市场"),
     (7, "修车厂", "汽修|修车厂|汽车维修"),
 ]
+
+# 高德在线采集：各分类目标数量（共 1000 条，覆盖四川全省）
+AMAP_TARGETS = {1: 210, 2: 200, 3: 150, 4: 100, 5: 130, 6: 140, 7: 70}
 
 # ---------------------------------------------------------------------------
 # 离线生成：全四川锚点（经度, 纬度, 地名, 市州, 权重, 是否川西高原）
@@ -87,14 +91,15 @@ SICHUAN_ANCHORS = [
     (102.8400, 28.0100, "昭觉",   "凉山州",   1, True),
 ]
 
-# 各分类固定数量目标（共 1310 条，全部落在四川境内）
+# 各分类固定数量目标（共 1000 条，全部落在四川境内）
 OFFLINE_TARGETS = [
-    (1, "工厂",   1000),
+    (1, "工厂",   210),
     (2, "仓库",   200),
-    (3, "加油站", 20),
-    (7, "修车厂", 30),
-    (5, "停车场", 50),
-    (6, "物流中心", 10),
+    (3, "加油站", 150),
+    (4, "收费站", 100),
+    (5, "停车场", 130),
+    (6, "物流中心", 140),
+    (7, "修车厂", 70),
 ]
 
 # 四川经纬度边界（越界坐标会被拉回边界内）
@@ -153,6 +158,8 @@ def make_name(rng, cid, city, seq):
         return f"{city}{rng.choice(REPAIR_WORDS)}汽修厂{seq:03d}号"
     if cid == 5:
         return f"{city}{rng.choice(PARK_PLACES)}停车场{seq:03d}号"
+    if cid == 4:
+        return f"{rng.choice(ROAD_NAMES)}{city}收费站{seq:03d}号"
     return f"{rng.choice(LOGISTICS_WORDS)}{city}物流中心{seq:02d}号"
 
 
@@ -203,6 +210,9 @@ def gen_offline():
             elif cid == 6:
                 capacity = round(rng.uniform(800, 2000), 1)
                 phone = None
+            elif cid == 4:
+                capacity = float(rng.randint(4, 16))  # 收费站车道数
+                phone = None
             else:
                 capacity = None
                 phone = None
@@ -244,70 +254,102 @@ def gen_offline():
             "warehouses": warehouses, "relations": relations}
 
 
-def fetch_amap(key, total, center="104.0668,30.5728", radius=30000):
+def fetch_amap(key, total=1000, center=None, radius=50000):
     """
-    调用高德「周边搜索 / place/around」接口，按分类关键词分页抓取真实 POI。
+    四川全省网格采集：以 SICHUAN_ANCHORS 各锚点为中心、radius 半径，
+    按 AMAP_TARGETS 分类目标数分页抓取真实 POI。
+    为均匀分布：每个锚点每类设采集上限（ceil(目标/锚点数)+余量），遍历锚点轮转采集。
     """
     rows, seen_locations = [], set()
-    per_category = math.ceil(total / len(CATEGORIES))
+    n_anchors = len(SICHUAN_ANCHORS)
     for cid, cname, keyword in CATEGORIES:
-        page, got = 1, 0
-        while got < per_category:
-            params = {
-                "keywords": keyword,
-                "location": center,
-                "radius": radius,
-                "offset": 20,
-                "page": page,
-                "key": key,
-                "extensions": "base",
-                "output": "JSON",
-            }
-            url = "https://restapi.amap.com/v3/place/around?" + urllib.parse.urlencode(params)
-            try:
-                with urllib.request.urlopen(url, timeout=10) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))
-            except Exception as e:
-                print(f"[WARN] {cname} 第{page}页请求失败：{e}，跳过本批")
+        target = AMAP_TARGETS.get(cid, 0)
+        if target <= 0:
+            continue
+        # 每锚点该类采集上限，避免过度集中在成都等大城市
+        cap = math.ceil(target / n_anchors) + 4
+        got = 0
+        print(f"[{cname}] 目标 {target} 条，遍历 {n_anchors} 个锚点（每锚点上限 {cap}）...")
+        for anchor in SICHUAN_ANCHORS:
+            if got >= target:
                 break
-            if data.get("status") != "1":
-                print(f"[ERROR] 高德返回错误：{data.get('info')}（检查 Key 类型须为 Web 服务）")
-                break
-
-            pois = data.get("pois") or []
-            if not pois:
-                break  # 该分类已抓完
-            for poi in pois:
-                location = poi.get("location")
-                if not location or "," not in location:
-                    continue  # 过滤无坐标数据
-                if location in seen_locations:
-                    continue  # 多关键词（|分隔）可能命中同一个 POI，按坐标去重
-                seen_locations.add(location)
-                lng_s, lat_s = location.split(",")
-                lng, lat = float(lng_s), float(lat_s)
-                adname = poi.get("adname") or "成都市"
-                rows.append((poi.get("name", "未命名POI"), cid, round(lng, 7), round(lat, 7),
-                             f"{poi.get('adname') or ''}{poi.get('address') or ''}", None,
-                             AMAP_TAG, poi.get("id", "")))
-                got += 1
-                if got >= per_category:
+            lng0, lat0 = anchor[0], anchor[1]
+            anchor_got = 0
+            page = 1
+            while got < target and anchor_got < cap:
+                params = {
+                    "keywords": keyword,
+                    "location": f"{lng0},{lat0}",
+                    "radius": radius,
+                    "offset": 20,
+                    "page": page,
+                    "key": key,
+                    "extensions": "base",
+                    "output": "JSON",
+                }
+                url = "https://restapi.amap.com/v3/place/around?" + urllib.parse.urlencode(params)
+                try:
+                    with urllib.request.urlopen(url, timeout=10) as resp:
+                        data = json.loads(resp.read().decode("utf-8"))
+                except Exception as e:
+                    print(f"  [WARN] {cname} {anchor[2]} 第{page}页请求失败：{e}")
                     break
-            page += 1
-            if page > 45:  # 高德单关键词约 900 条上限保护
-                break
-            time.sleep(0.15)  # 遵守 QPS 限制，避免被限流
-        print(f"  {cname}：已采集 {got} 条")
-    return rows[:total]
+                if data.get("status") != "1":
+                    print(f"  [ERROR] 高德返回错误：{data.get('info')}（检查 Key 类型须为 Web 服务）")
+                    return rows
+                pois = data.get("pois") or []
+                if not pois:
+                    break
+                added = 0
+                for poi in pois:
+                    location = poi.get("location")
+                    if not location or "," not in location:
+                        continue
+                    if location in seen_locations:
+                        continue
+                    seen_locations.add(location)
+                    lng_s, lat_s = location.split(",")
+                    lng, lat = float(lng_s), float(lat_s)
+                    # 越出四川边界的点丢弃（保证全省范围）
+                    if not (SC_LNG_MIN <= lng <= SC_LNG_MAX and SC_LAT_MIN <= lat <= SC_LAT_MAX):
+                        continue
+                    rows.append((poi.get("name", "未命名POI"), cid, round(lng, 7), round(lat, 7),
+                                 f"{poi.get('adname') or ''}{poi.get('address') or ''}", None,
+                                 AMAP_TAG, poi.get("id", "")))
+                    got += 1
+                    anchor_got += 1
+                    added += 1
+                    if got >= target or anchor_got >= cap:
+                        break
+                if added == 0:
+                    break  # 本页全部重复或越界，继续翻页无意义
+                page += 1
+                if page > 45:
+                    break
+                time.sleep(0.12)
+            if anchor_got:
+                print(f"  {anchor[2]}: +{anchor_got}，累计 {got}/{target}")
+        print(f"  {cname} 完成 {got}/{target}\n")
+    return rows
 
 
 def write_amap_sql(rows, out_path):
     """高德在线采集模式：仅写 POI（按批次标记幂等清理）。"""
+    # 按分类统计
+    stat = {}
+    for _, cid, *_ in rows:
+        stat[cid] = stat.get(cid, 0) + 1
+    stat_str = " / ".join(f"{next(c[1] for c in CATEGORIES if c[0]==cid)}{n}" for cid, n in sorted(stat.items()))
     lines = [
         "-- POI 采集数据（由 tools/poi_crawler.py 自动生成，请勿手工编辑）",
-        f"-- 来源：高德开放平台 place/around，共 {len(rows)} 条",
+        f"-- 来源：高德开放平台 place/around（四川全省 32 锚点网格采集），共 {len(rows)} 条",
+        f"-- 分布：{stat_str}",
         "-- 幂等导入：先清理本工具历史批次（按 contact_person 标记），再插入",
         "SET NAMES utf8mb4;",
+        "-- 补充修车厂分类（若不存在）",
+        ("INSERT INTO poi_category (category_name,description) "
+         "SELECT '修车厂','车辆维修保养场' WHERE NOT EXISTS "
+         "(SELECT 1 FROM poi_category WHERE category_name='修车厂');"),
         f"DELETE FROM poi WHERE contact_person = '{AMAP_TAG}';",
         "INSERT INTO poi (poi_name,category_id,longitude,latitude,address,capacity,contact_person,contact_phone) VALUES",
     ]
@@ -322,6 +364,7 @@ def write_amap_sql(rows, out_path):
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
     print(f"已生成 {len(rows)} 条 POI 的 SQL 文件：{out_path}")
+    print(f"  分布：{stat_str}")
 
 
 def chunked(seq, size):
@@ -340,7 +383,7 @@ def write_sichuan_sql(data, out_path):
     lines = [
         "-- ============================================================",
         "-- 全四川 POI 主数据（由 tools/poi_crawler.py --mode offline 生成）",
-        f"-- POI 共 {len(pois)} 条：工厂 1000 / 仓库 200 / 加油站 20 / 修车厂 30 / 停车场 50 / 物流中心 10",
+        f"-- POI 共 {len(pois)} 条：工厂 210 / 仓库 200 / 加油站 150 / 收费站 100 / 停车场 130 / 物流中心 140 / 修车厂 70",
         f"-- 同步重建主数据：工厂 {len(facs)} / 仓库 {len(whs)} / 厂仓关系 {len(rels)}",
         "-- 导入会清空 poi 关联业务数据（订单/调度/车辆/路线等），导入后重新开始仿真即可",
         "-- 幂等：重复导入前会先按外键依赖倒序清理旧数据",
@@ -421,12 +464,12 @@ def parse_args():
                         help="amap=高德API真实采集（需Key），offline=全四川离线生成（默认）")
     parser.add_argument("--key", default=os.environ.get("AMAP_KEY", ""),
                         help="高德 Web 服务 Key（也可用环境变量 AMAP_KEY）")
-    parser.add_argument("--total", type=int, default=500,
-                        help="amap 模式目标 POI 总数")
+    parser.add_argument("--total", type=int, default=1000,
+                        help="amap 模式目标 POI 总数（实际由 AMAP_TARGETS 各分类目标决定）")
     parser.add_argument("--center", default="104.0668,30.5728",
-                        help="amap 周边搜索中心点 经度,纬度")
-    parser.add_argument("--radius", type=int, default=30000,
-                        help="amap 周边搜索半径（米）")
+                        help="amap 单中心点模式 经度,纬度（全省网格模式忽略）")
+    parser.add_argument("--radius", type=int, default=50000,
+                        help="amap 周边搜索半径（米，高德上限 50000）")
     parser.add_argument("--out", default=os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "database", "poi_generated.sql"),
         help="输出 SQL 文件路径")
@@ -439,10 +482,10 @@ if __name__ == "__main__":
         if not ARGS.key:
             print("在线采集需要高德 Key：--key 或设置环境变量 AMAP_KEY（申请：https://lbs.amap.com）")
             sys.exit(1)
-        print(f"开始高德周边采集，中心 {ARGS.center} 半径 {ARGS.radius}m，目标 {ARGS.total} 条 ...")
+        print(f"开始高德全省网格采集（32 锚点，半径 {ARGS.radius}m），目标 1000 条 ...")
         rows = fetch_amap(ARGS.key, ARGS.total, ARGS.center, ARGS.radius)
         write_amap_sql(rows, ARGS.out)
     else:
-        print("离线生成全四川 POI（工厂1000/仓库200/加油站20/修车厂30/停车场50/物流中心10）...")
+        print("离线生成全四川 POI（工厂210/仓库200/加油站150/收费站100/停车场130/物流中心140/修车厂70，共1000）...")
         data = gen_offline()
         write_sichuan_sql(data, ARGS.out)

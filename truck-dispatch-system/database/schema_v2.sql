@@ -271,9 +271,16 @@ CREATE TABLE dispatch (
     status             VARCHAR(20) DEFAULT 'DISPATCHED' COMMENT '调度状态(DISPATCHED/IN_TRANSIT/COMPLETED/CANCELLED)',
     created_at         DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     updated_at         DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    -- 一车多单兜底：仅"未完成"的调度记录才填该列，已完成/已取消为 NULL。
+    -- NULL 不参与唯一性判断，因此唯一索引只约束"同一辆车不能同时有两条未完成任务"。
+    -- 应用层已有忙碌校验，此列为并发场景下的数据库级最后防线。
+    active_vehicle_id  INT GENERATED ALWAYS AS
+                       (CASE WHEN status IN ('DISPATCHED','IN_TRANSIT') THEN vehicle_id ELSE NULL END) VIRTUAL
+                       COMMENT '未完成调度占用的车辆(仅用于唯一约束)',
     INDEX idx_dispatch_order (order_id),
     INDEX idx_dispatch_vehicle (vehicle_id),
     INDEX idx_dispatch_driver (driver_id),
+    UNIQUE KEY uk_dispatch_active_vehicle (active_vehicle_id),
     CONSTRAINT fk_dispatch_order   FOREIGN KEY (order_id)   REFERENCES cargo_order(order_id),
     CONSTRAINT fk_dispatch_vehicle FOREIGN KEY (vehicle_id) REFERENCES vehicle(vehicle_id),
     CONSTRAINT fk_dispatch_driver  FOREIGN KEY (driver_id)  REFERENCES driver(driver_id),

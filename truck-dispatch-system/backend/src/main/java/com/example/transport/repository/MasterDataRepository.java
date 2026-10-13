@@ -141,7 +141,8 @@ public class MasterDataRepository {
      */
     public List<FactoryRelation> findFactoryRelations() {
         String sql = "SELECT fw.factory_id, fw.warehouse_id, fw.relation_type, "
-                + "f.poi_id AS factory_poi_id, w.poi_id AS warehouse_poi_id "
+                + "f.poi_id AS factory_poi_id, w.poi_id AS warehouse_poi_id, "
+                + "f.factory_type, w.warehouse_type "
                 + "FROM factory_warehouse fw "
                 + "JOIN factory f ON fw.factory_id = f.factory_id "
                 + "JOIN warehouse w ON fw.warehouse_id = w.warehouse_id";
@@ -150,12 +151,29 @@ public class MasterDataRepository {
                 rs.getInt("warehouse_id"),
                 rs.getString("relation_type"),
                 rs.getInt("factory_poi_id"),
-                rs.getInt("warehouse_poi_id")));
+                rs.getInt("warehouse_poi_id"),
+                rs.getString("factory_type"),
+                rs.getString("warehouse_type")));
     }
 
     /** 厂仓关系内部对象 */
     public record FactoryRelation(int factoryId, int warehouseId, String relationType,
-                                  int factoryPoiId, int warehousePoiId) {
+                                  int factoryPoiId, int warehousePoiId,
+                                  String factoryType, String warehouseType) {
+
+        /**
+         * 货物流向的起点 POI：采购(PROCURE) 是"仓库 -> 工厂"（原料流入工厂），
+         * 生产(PRODUCE)/销售(SALE) 是"工厂 -> 仓库"。
+         * 判断收敛在此处，人工建单与仿真自动建单共用，避免两处逻辑不一致。
+         */
+        public int originPoiId() {
+            return "PROCURE".equals(relationType) ? warehousePoiId : factoryPoiId;
+        }
+
+        /** 货物流向的终点 POI，规则见 {@link #originPoiId()} */
+        public int destPoiId() {
+            return "PROCURE".equals(relationType) ? factoryPoiId : warehousePoiId;
+        }
     }
 
     /* ====================== 主数据存在性校验（管理类写接口用） ====================== */
