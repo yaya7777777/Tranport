@@ -101,14 +101,15 @@ const error = ref('')
 const selectedVehicle = ref(null)
 const selectedPoi = ref(null)
 
-// POI 六个分类的颜色与图层开关（收费站当前无数据，不入图例）
+// POI 七个分类的颜色与图层开关
 const categories = [
   {id:1,name:'工厂',color:'#dc2626'}, {id:2,name:'仓库',color:'#2563eb'},
   {id:6,name:'物流中心',color:'#059669'}, {id:3,name:'加油站',color:'#f59e0b'},
-  {id:7,name:'修车厂',color:'#7c3aed'}, {id:5,name:'停车场',color:'#64748b'}
+  {id:7,name:'修车厂',color:'#7c3aed'}, {id:5,name:'停车场',color:'#64748b'},
+  {id:4,name:'收费站',color:'#b45309'}
 ]
 // 各分类圆点大小：工厂量大用小圆点降低视觉密度，物流中心少而重要更醒目
-const CAT_RADIUS = {1:3.5, 2:5, 3:5, 5:5, 6:7, 7:5}
+const CAT_RADIUS = {1:3.5, 2:5, 3:5, 4:5, 5:5, 6:7, 7:5}
 const activeLayers = ref(categories.map(c => c.id))
 const visiblePois = computed(() => pois.value.filter(p => activeLayers.value.includes(p.categoryId)))
 // 图例中展示各分类数量

@@ -1,0 +1,13 @@
+# ============================================================
+# truck-dispatch-system Python 工具依赖（tools/ 目录）
+# 环境要求：Python 3.8+
+#
+# 说明：
+#   - poi_crawler.py  纯标准库实现（urllib），零第三方依赖
+#   - modbus_collector.py 的 mock 模拟模式也是零依赖
+#   - 仅 modbus_collector.py 的 real 实机模式（RS485 接北斗模块）
+#     需要下面的 pymodbus；不跑实机可不装
+# ============================================================
+
+# 实机 Modbus/RS485 串口采集北斗定位数据（--mode real 时必需）
+pymodbus>=3.0,<4.0

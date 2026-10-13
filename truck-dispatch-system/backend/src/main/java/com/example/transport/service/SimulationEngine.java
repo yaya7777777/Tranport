@@ -419,7 +419,8 @@ public class SimulationEngine {
                 continue;
             }
             double distance = gisService.distanceKm(a.pos, originPoint);
-            double score = 30 * Math.exp(-distance / 25.0); // 离发货地越近分越高
+            // 全省调度：衰减半径 200km，省内各市州车辆均可参与抢单，近的优先
+            double score = 30 * Math.exp(-distance / 200.0);
             // 订单紧急度：priority 1(高)/2(中)/3(低) -> +30/+15/+0。
             // 缺了这一项时 priority 完全不参与决策（上面 SQL 的 ORDER BY priority 会被
             // "取最高分"的循环逻辑抹掉），加急订单与普通订单没有区别。

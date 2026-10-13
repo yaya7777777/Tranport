@@ -141,7 +141,8 @@ public class MasterDataRepository {
      */
     public List<FactoryRelation> findFactoryRelations() {
         String sql = "SELECT fw.factory_id, fw.warehouse_id, fw.relation_type, "
-                + "f.poi_id AS factory_poi_id, w.poi_id AS warehouse_poi_id "
+                + "f.poi_id AS factory_poi_id, w.poi_id AS warehouse_poi_id, "
+                + "f.factory_type, w.warehouse_type "
                 + "FROM factory_warehouse fw "
                 + "JOIN factory f ON fw.factory_id = f.factory_id "
                 + "JOIN warehouse w ON fw.warehouse_id = w.warehouse_id";
@@ -150,12 +151,15 @@ public class MasterDataRepository {
                 rs.getInt("warehouse_id"),
                 rs.getString("relation_type"),
                 rs.getInt("factory_poi_id"),
-                rs.getInt("warehouse_poi_id")));
+                rs.getInt("warehouse_poi_id"),
+                rs.getString("factory_type"),
+                rs.getString("warehouse_type")));
     }
 
     /** 厂仓关系内部对象 */
     public record FactoryRelation(int factoryId, int warehouseId, String relationType,
-                                  int factoryPoiId, int warehousePoiId) {
+                                  int factoryPoiId, int warehousePoiId,
+                                  String factoryType, String warehouseType) {
 
         /**
          * 货物流向的起点 POI：采购(PROCURE) 是"仓库 -> 工厂"（原料流入工厂），
